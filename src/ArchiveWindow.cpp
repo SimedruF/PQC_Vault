@@ -11,6 +11,7 @@
 ArchiveWindow::ArchiveWindow(const std::string& username) 
     : m_username(username), m_isVisible(false), m_isLoaded(false), m_selectedFile(-1),
       m_showAddFileDialog(false), m_showExtractDialog(false), m_showFileViewer(false),
+      m_showChangePasswordDialog(false), m_showOldPassword(false), m_showNewPassword(false),
       m_previewType(PreviewType::NONE), m_statusMessageTime(0.0f) {
     
     m_archive = std::make_unique<CryptoArchive>(username);
@@ -19,6 +20,9 @@ ArchiveWindow::ArchiveWindow(const std::string& username)
     memset(m_filePathBuffer, 0, sizeof(m_filePathBuffer));
     memset(m_fileNameBuffer, 0, sizeof(m_fileNameBuffer));
     memset(m_extractPathBuffer, 0, sizeof(m_extractPathBuffer));
+    memset(m_oldPasswordBuffer, 0, sizeof(m_oldPasswordBuffer));
+    memset(m_newPasswordBuffer, 0, sizeof(m_newPasswordBuffer));
+    memset(m_confirmPasswordBuffer, 0, sizeof(m_confirmPasswordBuffer));
     
     // Set default extract path
     std::filesystem::path defaultExtractPath = std::filesystem::current_path() / "extracted";
@@ -78,6 +82,13 @@ void ArchiveWindow::Render() {
                 } else {
                     SetStatusMessage("Archive integrity check failed!", 5.0f);
                 }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Change Password", "Ctrl+P")) {
+                m_showChangePasswordDialog = true;
+                memset(m_oldPasswordBuffer, 0, sizeof(m_oldPasswordBuffer));
+                memset(m_newPasswordBuffer, 0, sizeof(m_newPasswordBuffer));
+                memset(m_confirmPasswordBuffer, 0, sizeof(m_confirmPasswordBuffer));
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Reset Archive", nullptr)) {
@@ -163,12 +174,12 @@ void ArchiveWindow::Render() {
     ImGui::BeginChild("MainContent", ImVec2(0, -30));
     
     // File list
-    if (ImGui::BeginTable("FileList", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable)) {
+    if (ImGui::BeginTable("FileList", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 80.0f);
         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 100.0f);
         ImGui::TableSetupColumn("Modified", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 240.0f);
         ImGui::TableHeadersRow();
         
         for (int i = 0; i < static_cast<int>(m_fileList.size()); ++i) {
@@ -178,7 +189,7 @@ void ArchiveWindow::Render() {
             ImGui::TableSetColumnIndex(0);
             
             // File icon and name
-            ImGui::Text("%s %s", GetFileTypeIcon(entry.name).c_str(), entry.name.c_str());
+            ImGui::Text("%s  %s", GetFileTypeIcon(entry.name).c_str(), entry.name.c_str());
             
             // Selection
             if (ImGui::IsItemClicked()) {
@@ -190,55 +201,55 @@ void ArchiveWindow::Render() {
                 ShowFilePreview(entry);
             }
             
-            // Highlight pe hover pentru o experiență mai bună
+            // Highlight on hover for a better experience
             if (ImGui::IsItemHovered() && m_selectedFile != i) {
                 ImU32 hover_color = ImGui::GetColorU32(ImVec4(0.7f, 0.7f, 0.7f, 0.2f));
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, hover_color);
             }
             
-            // Meniu contextual (click dreapta)
+            // Context menu (right click)
             if (ImGui::IsItemClicked(1)) { // 1 pentru click dreapta
                 m_selectedFile = i;
                 ImGui::OpenPopup(("FileContextMenu_" + std::to_string(i)).c_str());
             }
             
-            // Afișăm meniul contextual
+            // Display context menu
             if (ImGui::BeginPopup(("FileContextMenu_" + std::to_string(i)).c_str())) {
-                // Header-ul meniului cu iconul fișierului
-                ImGui::TextColored(ImVec4(0.3f, 0.6f, 1.0f, 1.0f), "%s %s", 
+                // Menu header with file icon
+                ImGui::TextColored(ImVec4(0.3f, 0.6f, 1.0f, 1.0f), "%s  %s", 
                                   GetFileTypeIcon(entry.name).c_str(), entry.name.c_str());
                 ImGui::Separator();
                 
-                // Informații despre fișier
+                // File information
                 ImGui::TextDisabled("Size: %s", FormatFileSize(entry.size).c_str());
                 ImGui::TextDisabled("Modified: %s", entry.timestamp.c_str());
                 ImGui::Separator();
                 
-                // Opțiuni acțiuni
+                // Action options
                 ImGui::Text("Actions:");
                 
-                // Opțiunea de previzualizare
+                // Preview option
                 bool canPreview = IsTextFile(entry.name) || IsImageFile(entry.name);
-                if (ImGui::MenuItem("Preview File", "F3", false, canPreview)) {
+                if (ImGui::MenuItem("[*] Preview File", "F3", false, canPreview)) {
                     ShowFilePreview(entry);
                     ImGui::CloseCurrentPopup();
                 }
                 
-                // Dacă fișierul nu poate fi previzualizat, afișăm motivul
+                // If the file cannot be previewed, show the reason
                 if (!canPreview) {
                     ImGui::TextDisabled("(Preview not available for this file type)");
                 }
                 
                 ImGui::Separator();
                 
-                // Opțiuni pentru gestionarea fișierului
-                if (ImGui::MenuItem("Extract File", "Ctrl+E")) {
+                // File management options
+                if (ImGui::MenuItem("[>] Extract File", "Ctrl+E")) {
                     m_selectedFile = i;
                     m_showExtractDialog = true;
                     ImGui::CloseCurrentPopup();
                 }
                 
-                if (ImGui::MenuItem("Remove File", "Delete")) {
+                if (ImGui::MenuItem("[X] Remove File", "Delete")) {
                     if (m_archive->RemoveFile(entry.name)) {
                         RefreshFileList();
                         SetStatusMessage("File removed successfully!");
@@ -258,7 +269,10 @@ void ArchiveWindow::Render() {
             }
             
             ImGui::TableSetColumnIndex(1);
-            ImGui::Text("%s", GetFileTypeIcon(entry.name).c_str());
+            // Extract just the type without brackets for the type column
+            std::string typeIcon = GetFileTypeIcon(entry.name);
+            std::string typeOnly = typeIcon.substr(1, typeIcon.length() - 2); // Remove [ ]
+            ImGui::Text("%s", typeOnly.c_str());
             
             ImGui::TableSetColumnIndex(2);
             ImGui::Text("%s", FormatFileSize(entry.size).c_str());
@@ -268,16 +282,19 @@ void ArchiveWindow::Render() {
             
             ImGui::TableSetColumnIndex(4);
             ImGui::PushID(i);
-            if (ImGui::SmallButton("Extract")) {
+            // Extract button with download icon
+            if (ImGui::SmallButton("[>] Extract")) {
                 m_selectedFile = i;
                 m_showExtractDialog = true;
             }
             ImGui::SameLine();
-            if(ImGui::SmallButton("Preview")) {
+            // Preview button with eye icon
+            if(ImGui::SmallButton("[*] Preview")) {
                 ShowFilePreview(entry);
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton("Remove")) {
+            // Remove button with trash bin icon
+            if (ImGui::SmallButton("[X] Remove")) {
                 if (m_archive->RemoveFile(entry.name)) {
                     RefreshFileList();
                     SetStatusMessage("File removed successfully!");
@@ -290,12 +307,12 @@ void ArchiveWindow::Render() {
         
         ImGui::EndTable();
         
-        // Meniu contextual pentru zona goală din tabel
+        // Context menu for empty area in the table
         if (ImGui::IsMouseClicked(1) && ImGui::IsWindowHovered() && m_fileList.size() > 0) {
             ImGui::OpenPopup("TableContextMenu");
         }
         
-        // Afișăm meniul contextual pentru zona goală din tabel
+        // Display context menu for empty area in the table
         if (ImGui::BeginPopup("TableContextMenu")) {
             ImGui::Text("Archive Actions");
             ImGui::Separator();
@@ -327,15 +344,15 @@ void ArchiveWindow::Render() {
     
     // Bottom toolbar
     ImGui::Separator();
-    if (ImGui::Button("Add Files")) {
+    if (ImGui::Button("[+] Add Files")) {
         m_showAddFileDialog = true;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Extract Selected") && m_selectedFile >= 0) {
+    if (ImGui::Button("[>] Extract Selected") && m_selectedFile >= 0) {
         m_showExtractDialog = true;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Refresh")) {
+    if (ImGui::Button("[R] Refresh")) {
         RefreshFileList();
     }
     
@@ -343,9 +360,9 @@ void ArchiveWindow::Render() {
     auto stats = m_archive->GetStats();
     ImGui::Text("Files: %zu | Total Size: %s", stats.totalFiles, FormatFileSize(stats.totalSize).c_str());
     
-    // Procesăm shortcut-urile de tastatură
+    // Process keyboard shortcuts
     if (ImGui::IsKeyPressed(ImGuiKey_F3) && m_selectedFile >= 0) {
-        // Verificăm dacă fișierul selectat poate fi previzualizat
+        // Check if the selected file can be previewed
         if (m_selectedFile < static_cast<int>(m_fileList.size())) {
             const FileEntry& entry = m_fileList[m_selectedFile];
             if (IsTextFile(entry.name) || IsImageFile(entry.name)) {
@@ -367,6 +384,10 @@ void ArchiveWindow::Render() {
     
     if (m_showFileViewer) {
         ShowFileViewer();
+    }
+    
+    if (m_showChangePasswordDialog) {
+        ShowChangePasswordDialog();
     }
     
     ImGui::End();
@@ -473,7 +494,7 @@ void ArchiveWindow::RefreshFileList() {
     
     std::cout << "Retrieved " << m_fileList.size() << " files from archive" << std::endl;
     
-    // Verifică fiecare intrare din listă pentru validitate și elimină intrările invalide
+    // Check each entry in the list for validity and remove invalid entries
     bool allEntriesValid = true;
     std::vector<FileEntry> validEntries;
     validEntries.reserve(m_fileList.size());
@@ -543,14 +564,14 @@ void ArchiveWindow::RefreshFileList() {
         m_fileList = std::move(validEntries);
     }
     
-    // Pentru a rezolva problema cu fișierele care nu se afișează, putem adăuga o opțiune de a forța afișarea tuturor fișierelor,
-    // chiar și a celor considerate invalide. În mod normal, acest flag ar trebui să fie configurabil de utilizator,
-    // dar pentru diagnosticare, putem să îl activăm aici.
+    // To solve the problem with files not being displayed, we can add an option to force display all files,
+    // even those considered invalid. Normally, this flag should be user configurable,
+    // but for diagnostics, we can activate it here.
     bool showAllFiles = true; // Set to true to show all files regardless of validity
     
     if (showAllFiles && !allEntriesValid) {
         std::cout << "\nFORCING DISPLAY OF ALL FILES REGARDLESS OF VALIDITY\n" << std::endl;
-        // Resetează lista pentru a include toate fișierele
+        // Reset the list to include all files
         m_fileList = m_archive->GetFileList();
     }
     
@@ -577,16 +598,16 @@ void ArchiveWindow::drawGui() {
   if (ImGui::Button("Open File Dialog")) {
     IGFD::FileDialogConfig config;
     config.path = ".";
-    // Adăugăm flag-uri pentru a preveni flickering-ul
+    // Add flags to prevent flickering
     config.flags = ImGuiFileDialogFlags_Modal;
     ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".cpp,.h,.hpp", config);
   }
   
-  // Obținem dimensiuni standard pentru dialog
+  // Get standard dimensions for dialog
   ImVec2 dialogSize = GetStandardDialogSize();
   ImVec2 dialogPos = GetStandardDialogPosition();
   
-  // Setăm poziția și dimensiunea ferestrei înainte de a o afișa
+  // Set the position and size of the window before displaying it
   if (ImGuiFileDialog::Instance()->IsOpened("ChooseFileDlgKey")) {
     ImGui::SetNextWindowPos(dialogPos);
     ImGui::SetNextWindowSize(dialogSize);
@@ -623,7 +644,7 @@ void ArchiveWindow::ShowAddFileDialog() {
         
         ImGui::Separator();
         
-        if (ImGui::Button("Browse")) {
+        if (ImGui::Button("[F] Browse")) {
             IGFD::FileDialogConfig config;
 	        config.path = ".";
             
@@ -634,7 +655,7 @@ void ArchiveWindow::ShowAddFileDialog() {
             const char* filters = "All files (*.*){.*},Image files (*.png *.jpg *.jpeg *.bmp){.png,.jpg,.jpeg,.bmp},Text files (*.txt *.md){.txt,.md},Source files (*.cpp *.h){.cpp,.h}";
             
             ImGuiFileDialog::Instance()->OpenDialog(
-                "DialogDeschidere", "Alege un fișier", filters, config);
+                "FileOpenDialog", "Choose a file", filters, config);
             
             std::cout << "File browse dialog opened at path: " << config.path << std::endl;
             
@@ -661,14 +682,14 @@ void ArchiveWindow::ShowAddFileDialog() {
         ImVec2 dialogSize = GetStandardDialogSize(); //ImVec2(displaySize.x * 0.95f, displaySize.y * 0.8f);
         ImVec2 dialogPos = GetStandardDialogPosition();
 
-        // Stabilizăm dialogul setând dimensiunea și poziția ferestrei
-        if (ImGuiFileDialog::Instance()->IsOpened("DialogDeschidere")) {
+        // Stabilize the dialog by setting the window size and position
+        if (ImGuiFileDialog::Instance()->IsOpened("FileOpenDialog")) {
             ImGui::SetNextWindowPos(dialogPos);
             ImGui::SetNextWindowSize(dialogSize);
         }
         
-        // Afișăm dialogul
-        if (ImGuiFileDialog::Instance()->Display("DialogDeschidere", 
+        // Display the dialog
+        if (ImGuiFileDialog::Instance()->Display("FileOpenDialog", 
                                                ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize, 
                                                dialogSize, 
                                                dialogPos))
@@ -695,12 +716,12 @@ void ArchiveWindow::ShowAddFileDialog() {
         // Afișare fișier selectat
         if (!selectedFile.empty())
         {
-            ImGui::Text("Fișier selectat:");
+            ImGui::Text("Selected file:");
             ImGui::TextWrapped("%s", selectedFile.c_str());
         }
 
         ImGui::SameLine();
-        if (ImGui::Button("Add File")) {
+        if (ImGui::Button("[OK] Add File")) {
             std::string filePath = m_filePathBuffer;
             std::string fileName = m_fileNameBuffer;
             
@@ -773,7 +794,7 @@ void ArchiveWindow::ShowAddFileDialog() {
         }
         
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
+        if (ImGui::Button("[C] Cancel")) {
             m_showAddFileDialog = false;
         }
         
@@ -833,7 +854,7 @@ void ArchiveWindow::ShowExtractDialog() {
         ImGui::Text("Extract to:");
         ImGui::InputText("##extractpath", m_extractPathBuffer, sizeof(m_extractPathBuffer));
         
-        if (ImGui::Button("Browse Folder")) {
+        if (ImGui::Button("[F] Browse Folder")) {
             // Open ImGuiFileDialog for folder selection
             IGFD::FileDialogConfig config;
             config.path = std::filesystem::current_path().string();
@@ -845,14 +866,14 @@ void ArchiveWindow::ShowExtractDialog() {
                           ImGuiFileDialogFlags_DontShowHiddenFiles;
                           
             std::cout << "Opening folder selection dialog at path: " << config.path << std::endl;
-            std::cout << "Dialog ar trebui să permită doar selectarea directoarelor" << std::endl;
+            std::cout << "Dialog should only allow directory selection" << std::endl;
             ImGuiFileDialog::Instance()->OpenDialog("ChooseFolderDlgKey", "Choose Destination Folder", 
                 nullptr, config);  // nullptr pentru directoare
         }
         
         ImGui::Separator();
         
-        if (ImGui::Button("Extract")) {
+        if (ImGui::Button("[>] Extract")) {
             std::string extractPath = m_extractPathBuffer;
             
             std::cout << "\n---------- FILE EXTRACTION ----------" << std::endl;
@@ -932,7 +953,7 @@ void ArchiveWindow::ShowExtractDialog() {
         }
         
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
+        if (ImGui::Button("[C] Cancel")) {
             m_showExtractDialog = false;
         }
         
@@ -999,29 +1020,29 @@ void ArchiveWindow::ShowFileViewer() {
         (m_previewType == PreviewType::TEXT ? "TEXT" : 
          m_previewType == PreviewType::IMAGE ? "IMAGE" : "NONE") << std::endl;
     
-    // Verificăm dacă avem date pentru a afișa
+    // Check if we have data to display
     if (m_previewType == PreviewType::TEXT && !m_textPreviewData.empty()) {
-        // Convertim datele binare la text
+        // Convert binary data to text
         std::string text;
         
-        // Adăugăm un null terminator pentru a ne asigura că textul este valid
+        // Add a null terminator to ensure the text is valid
         std::vector<uint8_t> textData = m_textPreviewData;
         textData.push_back(0); // null terminator
         
-        // Convertim la șir de caractere
+        // Convert to character string
         text = reinterpret_cast<const char*>(textData.data());
         
-        // Deschidem o fereastră modală pentru previzualizare
+        // Open a modal window for preview
         ImGui::OpenPopup("Text Preview");
         
-        // Stabilim o dimensiune rezonabilă pentru fereastra de previzualizare
+        // Set a reasonable size for the preview window
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();
         ImVec2 previewSize = ImVec2(ImGui::GetIO().DisplaySize.x * 0.7f, ImGui::GetIO().DisplaySize.y * 0.7f);
         ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(previewSize, ImGuiCond_Appearing);
         
         if (ImGui::BeginPopupModal("Text Preview", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
-            // Adăugăm bara de meniu
+            // Add menu bar
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
                     if (ImGui::MenuItem("Close", "Esc")) {
@@ -1033,19 +1054,19 @@ void ArchiveWindow::ShowFileViewer() {
             }
             
             // Indicator că textul poate fi selectat
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 1.0f, 1.0f), "Puteți selecta textul și apăsa Ctrl+C pentru a copia");
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 1.0f, 1.0f), "You can select text and press Ctrl+C to copy");
             
-            // Afișăm textul într-o zonă scrollabilă
+            // Display text in a scrollable area
             ImGui::BeginChild("TextContent", ImVec2(0, -60), true, ImGuiWindowFlags_HorizontalScrollbar);
             
-            // Folosim funcția noastră helper pentru a afișa text selectabil
+            // Use our helper function to display selectable text
             DisplaySelectableText(text, ImGui::GetContentRegionAvail());
             
             ImGui::EndChild();
             
             ImGui::Separator();
             
-            // Afișăm informații despre dimensiunea fișierului
+            // Display information about file size
             ImGui::Text("Size: %s (%zu bytes)", FormatFileSize(m_textPreviewData.size()).c_str(), m_textPreviewData.size());
             
             // Buton pentru copierea întregului text, cu feedback și stilizare
@@ -1053,9 +1074,9 @@ void ArchiveWindow::ShowFileViewer() {
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.6f, 0.8f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.7f, 0.9f, 1.0f));
             
-            if (ImGui::Button("Copiază Tot Textul", ImVec2(140, 0))) {
+            if (ImGui::Button("[C] Copy All Text", ImVec2(160, 0))) {
                 ImGui::SetClipboardText(text.c_str());
-                SetStatusMessage("Text copiat în clipboard!", 2.0f);
+                SetStatusMessage("Text copied to clipboard!", 2.0f);
             }
             
             ImGui::PopStyleColor(3);
@@ -1081,7 +1102,7 @@ void ArchiveWindow::ShowFileViewer() {
         ImGui::SetNextWindowSize(previewSize, ImGuiCond_Appearing);
         
         if (ImGui::BeginPopupModal("Image Preview", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
-            // Adăugăm bara de meniu
+            // Add menu bar
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
                     if (ImGui::MenuItem("Close", "Esc")) {
@@ -1106,7 +1127,7 @@ void ArchiveWindow::ShowFileViewer() {
             
             ImGui::Separator();
             
-            // Afișăm informații despre dimensiunea fișierului
+            // Display information about file size
             ImGui::Text("Size: %s (%zu bytes)", FormatFileSize(m_imagePreviewData.size()).c_str(), m_imagePreviewData.size());
             
             // Buton pentru închidere
@@ -1166,20 +1187,60 @@ std::string ArchiveWindow::GetFileTypeIcon(const std::string& filename) const {
     std::string ext = std::filesystem::path(filename).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     
-    if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".bmp") {
-        return "🖼️";
-    } else if (ext == ".txt" || ext == ".log" || ext == ".md") {
-        return "📄";
-    } else if (ext == ".pdf") {
-        return "📋";
-    } else if (ext == ".doc" || ext == ".docx") {
-        return "📝";
-    } else if (ext == ".zip" || ext == ".rar" || ext == ".7z") {
-        return "📦";
-    } else if (ext == ".exe" || ext == ".msi") {
-        return "⚙️";
-    } else {
-        return "📁";
+    // Image files
+    if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".bmp" || ext == ".tiff" || ext == ".webp") {
+        return "[IMG]";
+    } 
+    // Text files
+    else if (ext == ".txt" || ext == ".log" || ext == ".md" || ext == ".csv") {
+        return "[TXT]";
+    }
+    // Code files
+    else if (ext == ".cpp" || ext == ".h" || ext == ".c" || ext == ".hpp" || ext == ".js" || 
+             ext == ".ts" || ext == ".py" || ext == ".java" || ext == ".cs" || ext == ".php") {
+        return "[CODE]";
+    }
+    // Document files
+    else if (ext == ".pdf") {
+        return "[PDF]";
+    } 
+    else if (ext == ".doc" || ext == ".docx") {
+        return "[DOC]";
+    }
+    else if (ext == ".xls" || ext == ".xlsx" || ext == ".ods") {
+        return "[XLS]";
+    }
+    else if (ext == ".ppt" || ext == ".pptx") {
+        return "[PPT]";
+    }
+    // Archive files
+    else if (ext == ".zip" || ext == ".rar" || ext == ".7z" || ext == ".tar" || 
+             ext == ".gz" || ext == ".bz2" || ext == ".xz") {
+        return "[ZIP]";
+    }
+    // Executable files
+    else if (ext == ".exe" || ext == ".msi" || ext == ".app" || ext == ".sh" || 
+             ext == ".bat" || ext == ".cmd") {
+        return "[EXE]";
+    }
+    // Media files
+    else if (ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".flac") {
+        return "[AUD]";
+    }
+    else if (ext == ".mp4" || ext == ".avi" || ext == ".mkv" || ext == ".mov" || ext == ".wmv") {
+        return "[VID]";
+    }
+    // HTML/Web files
+    else if (ext == ".html" || ext == ".htm" || ext == ".css" || ext == ".xml") {
+        return "[WEB]";
+    }
+    // Directory (though likely not used in this archive system)
+    else if (ext == "" && filename.back() == '/') {
+        return "[DIR]";
+    }
+    // Default for other file types
+    else {
+        return "[FILE]";
     }
 }
 
@@ -1221,29 +1282,29 @@ bool ArchiveWindow::IsDocumentFile(const std::string& filename) const {
 void ArchiveWindow::ShowImagePreview(const std::vector<uint8_t>& data) {
     std::cout << "ShowImagePreview called with " << data.size() << " bytes" << std::endl;
     
-    // Salvăm datele pentru afișare în ciclul de randare
+    // Save data for display in the rendering cycle
     m_imagePreviewData = data;
     m_previewType = PreviewType::IMAGE;
     m_showFileViewer = true;
     
     std::cout << "Image preview prepared, m_showFileViewer set to true" << std::endl;
     
-    // Această secțiune a fost mutată în ShowFileViewer pentru a evita duplicarea codului
-    // și pentru a asigura o gestionare consecventă a previzualizărilor
+    // This section was moved to ShowFileViewer to avoid code duplication
+    // and to ensure consistent handling of previews
 }
 
 void ArchiveWindow::ShowTextPreview(const std::vector<uint8_t>& data) {
     std::cout << "ShowTextPreview called with " << data.size() << " bytes" << std::endl;
     
-    // Salvăm datele pentru afișare în ciclul de randare
+    // Save data for display in the rendering cycle
     m_textPreviewData = data;
     m_previewType = PreviewType::TEXT;
     m_showFileViewer = true;
     
     std::cout << "Text preview prepared, m_showFileViewer set to true" << std::endl;
     
-    // Această secțiune a fost mutată în ShowFileViewer pentru a evita duplicarea codului
-    // și pentru a asigura o gestionare consecventă a previzualizărilor
+    // This section was moved to ShowFileViewer to avoid code duplication
+    // and to ensure consistent handling of previews
 }
 
 void ArchiveWindow::ShowFilePreview(const FileEntry& entry) {
@@ -1264,7 +1325,7 @@ void ArchiveWindow::ShowFilePreview(const FileEntry& entry) {
         m_archive->RepairArchive();
     }
     
-    // Verificăm dacă fișierul are date valide în obiectul entry
+    // Check if the file has valid data in the entry object
     if (entry.data.empty()) {
         std::cout << "WARNING: Entry has empty data in FileEntry object!" << std::endl;
         std::cout << "Will attempt to extract from archive anyway..." << std::endl;
@@ -1275,7 +1336,7 @@ void ArchiveWindow::ShowFilePreview(const FileEntry& entry) {
     // Run diagnostic to check archive state
     m_archive->DiagnoseArchive();
     
-    // Extragem datele fișierului în memorie
+    // Extract file data into memory
     std::vector<uint8_t> fileData;
     std::cout << "Calling ExtractFileToMemory for file: " << entry.name << std::endl;
     bool success = m_archive->ExtractFileToMemory(entry.name, fileData);
@@ -1323,7 +1384,7 @@ void ArchiveWindow::ShowFilePreview(const FileEntry& entry) {
     // Setăm flag-ul pentru a arăta previzualizarea
     m_showFileViewer = true;
     
-    // În funcție de tipul fișierului, alegem metoda potrivită de previzualizare
+    // Depending on the file type, choose the appropriate preview method
     std::cout << "File type checks - IsText: " << (IsTextFile(entry.name) ? "Yes" : "No") 
               << ", IsImage: " << (IsImageFile(entry.name) ? "Yes" : "No") << std::endl;
               
@@ -1346,39 +1407,39 @@ void ArchiveWindow::ShowFilePreview(const FileEntry& entry) {
 // Helper methods for consistent dialog sizing
 ImVec2 ArchiveWindow::GetStandardDialogSize() const {
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-    // Folosim dimensiuni fixe pentru a preveni recalcularea care poate cauza flickering
+    // Use fixed dimensions to prevent recalculation which can cause flickering
     return ImVec2(displaySize.x * 0.99f, displaySize.y * 0.8f);
 }
 
 ImVec2 ArchiveWindow::GetStandardDialogPosition() const {
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
     ImVec2 dialogSize = GetStandardDialogSize();
-    // Centrat pe ecran
+    // Centered on screen
     return ImVec2((displaySize.x - dialogSize.x) * 0.5f, 
                   (displaySize.y - dialogSize.y) * 0.5f);
 }
 
-// Implementare helper pentru text selectabil multi-linie
-// Helper pentru afișarea textului selectabil
+// Helper implementation for multi-line selectable text
+// Helper for displaying selectable text
 void ArchiveWindow::DisplaySelectableText(const std::string& text, const ImVec2& size) {
-    // Folosim variabile statice pentru a păstra memoria alocată între frame-uri
+    // Use static variables to keep memory allocated between frames
     static char* buffer = nullptr;
     static size_t buffer_size = 0;
     static bool showCopySuccessMsg = false;
     static float copyMsgTimer = 0.0f;
     
-    // Alocăm sau realocăm buffer-ul dacă e nevoie
+    // Allocate or reallocate buffer if needed
     if (buffer_size < text.size() + 1) {
         delete[] buffer;
         buffer_size = text.size() + 1;
         buffer = new char[buffer_size];
     }
     
-    // Copiem textul în buffer
+    // Copy the text to buffer
     std::copy(text.begin(), text.end(), buffer);
     buffer[text.size()] = '\0';
     
-    // Afișăm textul ca input readonly care permite selectarea
+    // Display text as readonly input that allows selection
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.05f, 0.05f, 0.05f, 0.5f));
     ImGui::InputTextMultiline("##TextPreviewContent", 
                              buffer, 
@@ -1387,16 +1448,16 @@ void ArchiveWindow::DisplaySelectableText(const std::string& text, const ImVec2&
                              ImGuiInputTextFlags_ReadOnly);
     ImGui::PopStyleColor();
     
-    // Afișăm un tooltip explicativ când textul este hoverat
+    // Display an explanatory tooltip when text is hovered
     if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
-        ImGui::Text("Selectați textul și folosiți Ctrl+C pentru a copia");
+        ImGui::Text("Select text and use Ctrl+C to copy");
         ImGui::EndTooltip();
     }
     
     // Button for copying all text with user feedback
     ImGui::PushID("CopyAllTextButton");
-    if (ImGui::Button("Copiază Tot Textul", ImVec2(140, 0))) {
+    if (ImGui::Button("Copy All Text", ImVec2(140, 0))) {
         ImGui::SetClipboardText(text.c_str());
         showCopySuccessMsg = true;
         copyMsgTimer = 2.0f; // Show message for 2 seconds
@@ -1406,7 +1467,7 @@ void ArchiveWindow::DisplaySelectableText(const std::string& text, const ImVec2&
     // Show success message when text is copied via button
     if (showCopySuccessMsg) {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Text copiat în clipboard!");
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Text copied to clipboard!");
         
         // Update timer and hide message when time is up
         copyMsgTimer -= ImGui::GetIO().DeltaTime;
@@ -1414,4 +1475,184 @@ void ArchiveWindow::DisplaySelectableText(const std::string& text, const ImVec2&
             showCopySuccessMsg = false;
         }
     }
+}
+
+void ArchiveWindow::ShowChangePasswordDialog() {
+    ImGui::SetNextWindowSize(ImVec2(450, 300), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), 
+                           ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    
+    if (ImGui::Begin("Change Archive Password", &m_showChangePasswordDialog, 
+                    ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+        
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Warning: Changing your password affects the crypto material");
+        ImGui::TextWrapped("Ensure you remember your new password, as there is no recovery option if you forget it.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Old password input
+        ImGui::Text("Current password:");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 120);
+        if (m_showOldPassword) {
+            ImGui::InputText("##oldpass", m_oldPasswordBuffer, sizeof(m_oldPasswordBuffer));
+        } else {
+            ImGui::InputText("##oldpass", m_oldPasswordBuffer, sizeof(m_oldPasswordBuffer), ImGuiInputTextFlags_Password);
+        }
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Show##old", &m_showOldPassword)) {}
+        
+        ImGui::Spacing();
+        
+        // New password input
+        ImGui::Text("New password:");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 120);
+        if (m_showNewPassword) {
+            ImGui::InputText("##newpass", m_newPasswordBuffer, sizeof(m_newPasswordBuffer));
+        } else {
+            ImGui::InputText("##newpass", m_newPasswordBuffer, sizeof(m_newPasswordBuffer), ImGuiInputTextFlags_Password);
+        }
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Show##new", &m_showNewPassword)) {}
+        
+        // Confirm new password
+        ImGui::Text("Confirm new password:");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 120);
+        if (m_showNewPassword) {
+            ImGui::InputText("##confirmpass", m_confirmPasswordBuffer, sizeof(m_confirmPasswordBuffer));
+        } else {
+            ImGui::InputText("##confirmpass", m_confirmPasswordBuffer, sizeof(m_confirmPasswordBuffer), ImGuiInputTextFlags_Password);
+        }
+        
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        static std::string errorMsg;
+        
+        // Show any error message
+        if (!errorMsg.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", errorMsg.c_str());
+            ImGui::Spacing();
+        }
+        
+        // Calculate button positions for centering
+        float windowWidth = ImGui::GetWindowWidth();
+        float buttonsWidth = 300; // Total width of both buttons plus spacing
+        float startX = (windowWidth - buttonsWidth) * 0.5f;
+        
+        ImGui::SetCursorPosX(startX);
+        if (ImGui::Button("Change Password", ImVec2(140, 30))) {
+            std::string oldPassword(m_oldPasswordBuffer);
+            std::string newPassword(m_newPasswordBuffer);
+            std::string confirmPassword(m_confirmPasswordBuffer);
+            
+            // Validate inputs
+            if (oldPassword.empty() || newPassword.empty() || confirmPassword.empty()) {
+                errorMsg = "All fields are required.";
+            } else if (newPassword != confirmPassword) {
+                errorMsg = "New passwords do not match.";
+            } else if (newPassword.length() < 8) {
+                errorMsg = "New password must be at least 8 characters.";
+            } else {
+                // Attempt to change the password
+                if (m_archive->ChangePassword(oldPassword, newPassword)) {
+                    // Update the stored password
+                    m_password = newPassword;
+                    SetStatusMessage("Password changed successfully!");
+                    
+                    // Clear fields and close dialog
+                    memset(m_oldPasswordBuffer, 0, sizeof(m_oldPasswordBuffer));
+                    memset(m_newPasswordBuffer, 0, sizeof(m_newPasswordBuffer));
+                    memset(m_confirmPasswordBuffer, 0, sizeof(m_confirmPasswordBuffer));
+                    errorMsg.clear();
+                    m_showChangePasswordDialog = false;
+                } else {
+                    errorMsg = "Failed to change password. Current password may be incorrect.";
+                }
+            }
+        }
+        
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(startX + 160);
+        if (ImGui::Button("Cancel", ImVec2(140, 30))) {
+            // Clear fields and error message
+            memset(m_oldPasswordBuffer, 0, sizeof(m_oldPasswordBuffer));
+            memset(m_newPasswordBuffer, 0, sizeof(m_newPasswordBuffer));
+            memset(m_confirmPasswordBuffer, 0, sizeof(m_confirmPasswordBuffer));
+            errorMsg.clear();
+            m_showChangePasswordDialog = false;
+        }
+    }
+    
+    ImGui::End();
+}
+
+bool ArchiveWindow::LoadArchive(const std::string& archiveName, const std::string& password) {
+    std::cout << "\n---------- ARCHIVE WINDOW LOAD ARCHIVE ----------" << std::endl;
+    std::cout << "Loading archive: " << archiveName << " for user " << m_username << std::endl;
+    
+    // Create a new archive object with the specified archive name
+    m_archive = std::make_unique<CryptoArchive>(m_username, archiveName);
+    m_password = password;
+    
+    bool success = false;
+    
+    // Log the expected file path for debugging
+    std::string expectedPath = "archives/" + m_username + "_" + archiveName + ".enc";
+    std::cout << "Expected archive file path: " << expectedPath << std::endl;
+    std::cout << "File exists check: " << (std::filesystem::exists(expectedPath) ? "Yes" : "No") << std::endl;
+    
+    // First try to load if archive exists
+    if (m_archive->ArchiveExists()) {
+        std::cout << "Archive exists, loading..." << std::endl;
+        success = m_archive->LoadArchive(password);
+        
+        if (success) {
+            std::cout << "Successfully loaded archive: " << archiveName << std::endl;
+            // Reset UI state for the new archive
+            m_selectedFile = -1; // Reset selected file
+            m_previewData.clear(); // Clear preview data
+            m_previewType = PreviewType::NONE; // Reset preview type
+            SetStatusMessage("Archive '" + archiveName + "' loaded successfully");
+        } else {
+            std::cout << "Loading archive " << archiveName << " failed. Archive might be corrupted or password is wrong." << std::endl;
+            SetStatusMessage("Failed to load archive '" + archiveName + "'");
+        }
+    } else {
+        std::cout << "Archive " << archiveName << " does not exist." << std::endl;
+        SetStatusMessage("Archive '" + archiveName + "' does not exist");
+        std::cout << "------------------------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    m_isLoaded = success;
+    std::cout << "Archive loaded state: " << (m_isLoaded ? "Yes" : "No") << std::endl;
+    std::cout << "------------------------------------------------\n" << std::endl;
+    return success;
+}
+
+void ArchiveWindow::DiagnoseCurrentState() {
+    std::cout << "\n========== ARCHIVE WINDOW DIAGNOSTIC ==========\n" << std::endl;
+    std::cout << "Username: " << m_username << std::endl;
+    std::cout << "Archive loaded state: " << (m_isLoaded ? "Yes" : "No") << std::endl;
+    std::cout << "Window visible state: " << (m_isVisible ? "Yes" : "No") << std::endl;
+    
+    if (m_archive) {
+        std::cout << "Archive object exists" << std::endl;
+        std::cout << "Archive name: " << m_archive->GetArchiveName() << std::endl;
+        std::string archivePath = m_archive->GetArchiveFilePath();
+        std::cout << "Archive path: " << archivePath << std::endl;
+        std::cout << "Archive file exists: " << (std::filesystem::exists(archivePath) ? "Yes" : "No") << std::endl;
+        m_archive->DiagnoseArchive();
+    } else {
+        std::cout << "WARNING: Archive object is null!" << std::endl;
+    }
+    
+    std::cout << "\nSelected file index: " << m_selectedFile << std::endl;
+    std::cout << "Preview type: " << (m_previewType == PreviewType::NONE ? "None" : 
+                                      m_previewType == PreviewType::TEXT ? "Text" : "Image") << std::endl;
+    std::cout << "Status message: " << m_statusMessage << std::endl;
+    
+    std::cout << "\n==============================================\n" << std::endl;
 }

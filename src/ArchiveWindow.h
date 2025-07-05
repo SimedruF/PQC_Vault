@@ -23,6 +23,13 @@ public:
     // Initialize archive for user
     bool Initialize(const std::string& password);
     
+    // Change the current archive
+    // Returns true if the archive was successfully loaded, false otherwise
+    bool LoadArchive(const std::string& archiveName, const std::string& password);
+    
+    // Debug method to check the current archive state
+    void DiagnoseCurrentState();
+    
     // Check if archive is loaded
     bool IsLoaded() const;
     
@@ -54,6 +61,12 @@ private:
     bool m_showAddFileDialog;
     bool m_showExtractDialog;
     bool m_showFileViewer;
+    bool m_showChangePasswordDialog;
+    char m_oldPasswordBuffer[256];
+    char m_newPasswordBuffer[256];
+    char m_confirmPasswordBuffer[256];
+    bool m_showOldPassword;
+    bool m_showNewPassword;
    // PreviewType m_previewType;  // Tipul de previzualizare curent
     std::vector<uint8_t> m_textPreviewData;  // Date pentru previzualizare text
     std::vector<uint8_t> m_imagePreviewData; // Date pentru previzualizare imagine
@@ -70,6 +83,7 @@ private:
     void ShowExtractDialog();
     void ShowFileViewer();
     void ShowArchiveStats();
+    void ShowChangePasswordDialog();
     void HandleDragDrop();
 
     

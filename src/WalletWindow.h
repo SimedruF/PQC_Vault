@@ -18,9 +18,23 @@ private:
     bool shouldClose;
     bool showSettings;
     bool showArchive;
+    bool showCreateArchiveDialog;
+    
+    // User's archives list
+    std::vector<std::string> userArchives;
+    int selectedArchiveIndex;
+    
+    // New archive creation
+    char newArchiveNameBuffer[256];
     
     // Archive management
     std::unique_ptr<ArchiveWindow> archiveWindow;
+    
+    // Load the list of user archives
+    void LoadUserArchives();
+    void OpenSelectedArchive();
+    void CreateNewArchive();
+    void ShowCreateArchiveDialog();
     
     void DrawMainContent();
     void DrawSettings();

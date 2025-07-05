@@ -51,7 +51,7 @@ int main() {
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
     
-    // Customizare stil pentru o interfață mai frumoasă
+    // Style customization for a more beautiful interface
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 5.0f;
     style.FrameRounding = 3.0f;

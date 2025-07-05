@@ -16,8 +16,14 @@ struct FileEntry {
 
 class CryptoArchive {
 public:
-    CryptoArchive(const std::string& username);
+    CryptoArchive(const std::string& username, const std::string& archiveName = "img");
     ~CryptoArchive();
+    
+    // Static method to find all archives for a given user
+    static std::vector<std::string> FindUserArchives(const std::string& username);
+    
+    // Static method to create a new archive with a given name
+    static bool CreateNewArchive(const std::string& username, const std::string& password, const std::string& archiveName);
     
     // Initialize archive for user
     bool InitializeArchive(const std::string& password);
@@ -27,6 +33,12 @@ public:
     
     // Save archive to encrypted file
     bool SaveArchive();
+    
+    // Set archive name (changes the target file)
+    void SetArchiveName(const std::string& archiveName);
+    
+    // Get current archive name
+    std::string GetArchiveName() const;
     
     // Add file to archive
     bool AddFile(const std::string& filePath, const std::string& name = "");
@@ -54,6 +66,9 @@ public:
     };
     ArchiveStats GetStats() const;
     
+    // Change the password/encryption key for the archive
+    bool ChangePassword(const std::string& oldPassword, const std::string& newPassword);
+    
     // Verify archive integrity
     bool VerifyIntegrity() const;
         // Extract file to memory
@@ -71,14 +86,27 @@ public:
     // Attempt to repair archive issues
     // This will scan for issues and try to fix them
     bool RepairArchive();
+
+    // Utility functions
+    std::string GetArchiveFilePath() const;
+
 private:
+    // User and archive identity
     std::string m_username;
-    std::string m_password;  // Store the password for re-encryption when saving
+    std::string m_archiveName;
     std::string m_archivePath;
-    std::map<std::string, FileEntry> m_files;
+    
+    // Security and state
     std::vector<uint8_t> m_encryptionKey;
+    std::string m_password;
     bool m_isLoaded;
     
+    // Archive content
+    std::map<std::string, FileEntry> m_files;
+    
+
+    
+    // Encryption functions
     // Encryption/Decryption using Kyber
     struct ArchiveEncryption {
         std::vector<uint8_t> ciphertext;
@@ -107,12 +135,5 @@ private:
     
     // Get timestamp
     std::string GetCurrentTimestamp() const;
-    
-    // Get archive file path
-    std::string GetArchiveFilePath() const;
-    
-    // Ensure archive directory exists
-    void EnsureArchiveDirectory() const;
-
 
 };

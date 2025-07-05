@@ -10,10 +10,11 @@
 #include <openssl/sha.h>
 #include <oqs/oqs.h>
 
-CryptoArchive::CryptoArchive(const std::string& username) 
-    : m_username(username), m_isLoaded(false) {
+CryptoArchive::CryptoArchive(const std::string& username, const std::string& archiveName) 
+    : m_username(username), m_archiveName(archiveName), m_isLoaded(false) {
     m_archivePath = GetArchiveFilePath();
-    EnsureArchiveDirectory();
+    // Ensure the archives directory exists
+    std::filesystem::create_directories("archives");
 }
 
 CryptoArchive::~CryptoArchive() {
@@ -169,7 +170,7 @@ bool CryptoArchive::SaveArchive() {
         std::cout << "Serialized data size: " << serializedData.size() << " bytes" << std::endl;
         
         // Ensure the archive directory exists
-        EnsureArchiveDirectory();
+        std::filesystem::create_directories("archives");
         
         // Check if directory exists
         if (!std::filesystem::exists("archives")) {
@@ -1001,11 +1002,7 @@ std::string CryptoArchive::GetCurrentTimestamp() const {
 }
 
 std::string CryptoArchive::GetArchiveFilePath() const {
-    return "archives/" + m_username + "_img.enc";
-}
-
-void CryptoArchive::EnsureArchiveDirectory() const {
-    std::filesystem::create_directories("archives");
+    return "archives/" + m_username + "_" + m_archiveName + ".enc";
 }
 
 void CryptoArchive::DiagnoseArchive() {
@@ -1197,4 +1194,108 @@ bool CryptoArchive::RepairArchive() {
         std::cout << "---------------------------------\n" << std::endl;
         return true;
     }
+}
+
+std::vector<std::string> CryptoArchive::FindUserArchives(const std::string& username) {
+    std::cout << "\n---------- FIND USER ARCHIVES ----------" << std::endl;
+    std::vector<std::string> archives;
+    std::string archivesDir = "archives";
+    std::string userPrefix = username + "_";
+    
+    std::cout << "Looking for archives for user: " << username << std::endl;
+    std::cout << "User prefix: " << userPrefix << std::endl;
+    std::cout << "Archives directory exists: " << (std::filesystem::exists(archivesDir) ? "Yes" : "No") << std::endl;
+    
+    // Ensure the archives directory exists
+    if (!std::filesystem::exists(archivesDir)) {
+        std::cout << "Archives directory does not exist!" << std::endl;
+        std::cout << "--------------------------------------\n" << std::endl;
+        return archives; // Return empty list if directory doesn't exist
+    }
+    
+    // Iterate through the directory and find all archives that match the username prefix
+    std::cout << "Files in archives directory:" << std::endl;
+    for (const auto& entry : std::filesystem::directory_iterator(archivesDir)) {
+        if (entry.is_regular_file()) {
+            std::string filename = entry.path().filename().string();
+            std::cout << " - " << filename;
+            
+            // Check if the file starts with the username prefix
+            if (filename.find(userPrefix) == 0) {
+                // Extract archive name from filename (remove username_ prefix and .enc extension)
+                std::string archiveName = filename.substr(userPrefix.length());
+                std::cout << " (matches user prefix)";
+                
+                size_t extPos = archiveName.rfind(".enc");
+                if (extPos != std::string::npos) {
+                    archiveName = archiveName.substr(0, extPos);
+                    std::cout << ", extracted name: " << archiveName;
+                }
+                
+                archives.push_back(archiveName);
+                std::cout << ", added to list" << std::endl;
+            } else {
+                std::cout << " (no match)" << std::endl;
+            }
+        } else {
+            std::cout << " (not a regular file)" << std::endl;
+        }
+    }
+    
+    std::cout << "Found " << archives.size() << " archives for user " << username << std::endl;
+    for (size_t i = 0; i < archives.size(); i++) {
+        std::cout << " [" << i << "] " << archives[i] << std::endl;
+    }
+    std::cout << "--------------------------------------\n" << std::endl;
+    return archives;
+}
+
+void CryptoArchive::SetArchiveName(const std::string& archiveName) {
+    m_archiveName = archiveName;
+    m_archivePath = GetArchiveFilePath();
+}
+
+std::string CryptoArchive::GetArchiveName() const {
+    return m_archiveName;
+}
+
+bool CryptoArchive::CreateNewArchive(const std::string& username, const std::string& password, const std::string& archiveName) {
+    // Verifică dacă există deja o arhivă cu acest nume
+    CryptoArchive archive(username, archiveName);
+    
+    // Dacă arhiva există, returnăm false
+    if (archive.ArchiveExists()) {
+        return false;
+    }
+    
+    // Inițializăm și salvăm noua arhivă
+    return archive.InitializeArchive(password);
+}
+
+bool CryptoArchive::ChangePassword(const std::string& oldPassword, const std::string& newPassword) {
+    std::cout << "\n---------- CHANGE PASSWORD ----------" << std::endl;
+    
+    if (!m_isLoaded) {
+        std::cout << "Cannot change password - archive not loaded!" << std::endl;
+        std::cout << "---------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    // First verify the old password by attempting to decrypt the archive
+    std::vector<uint8_t> decryptedData = DecryptArchiveData(oldPassword);
+    if (decryptedData.empty()) {
+        std::cout << "Invalid old password!" << std::endl;
+        std::cout << "---------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    // Old password is correct, update the stored password
+    m_password = newPassword;
+    std::cout << "Password changed successfully" << std::endl;
+    
+    // Save the archive with the new password
+    bool saveResult = SaveArchive();
+    
+    std::cout << "---------------------------------\n" << std::endl;
+    return saveResult;
 }

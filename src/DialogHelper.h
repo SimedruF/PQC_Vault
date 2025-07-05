@@ -3,40 +3,40 @@
 #include <imgui.h>
 
 // Anti-Flickering Dialog Helper
-// Acest fișier conține utilitar pentru rezolvarea problemei de flickering în ImGuiFileDialog
+// This file contains utilities for solving the flickering problem in ImGuiFileDialog
 
 namespace DialogHelper {
 
-    // Obține dimensiunea standard pentru dialog (80% din ecran)
+    // Get standard dialog size (80% of screen)
     inline ImVec2 GetStandardDialogSize() {
         ImVec2 displaySize = ImGui::GetIO().DisplaySize;
         return ImVec2(displaySize.x * 0.8f, displaySize.y * 0.8f);
     }
     
-    // Obține poziția standard pentru dialog (10% de la margini)
+    // Get standard dialog position (10% from edges)
     inline ImVec2 GetStandardDialogPosition() {
         ImVec2 displaySize = ImGui::GetIO().DisplaySize;
         return ImVec2(displaySize.x * 0.1f, displaySize.y * 0.1f);
     }
     
-    // Funcție helper pentru a stabili o dimensiune și poziție fixă pentru dialog
+    // Helper function to establish a fixed size and position for dialog
     inline void SetupNextWindowForDialog() {
         ImVec2 dialogSize = GetStandardDialogSize();
         ImVec2 dialogPos = GetStandardDialogPosition();
         
-        // Setează poziția și dimensiunea ferestrei pentru a preveni flickering-ul
+        // Set the position and size of the window to prevent flickering
         ImGui::SetNextWindowPos(dialogPos);
         ImGui::SetNextWindowSize(dialogSize);
     }
     
-    // Funcție helper pentru configurarea unui dialog ImGuiFileDialog
+    // Helper function for configuring an ImGuiFileDialog
     template<typename ConfigType>
     inline void ConfigureFileDialogForStability(ConfigType& config) {
-        // Setează flag-urile necesare pentru a preveni flickering-ul
+        // Set the necessary flags to prevent flickering
         config.flags = ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_NoResize;
     }
     
-    // Flags recomandate pentru afișarea dialogului
+    // Recommended flags for displaying the dialog
     inline int GetRecommendedDialogFlags() {
         return ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
     }
@@ -51,19 +51,19 @@ config.path = ".";
 DialogHelper::ConfigureFileDialogForStability(config);
 ImGuiFileDialog::Instance()->OpenDialog("DialogId", "Titlu", "filtre", config);
 
-// Înainte de afișarea dialogului
+// Before displaying the dialog
 if (ImGuiFileDialog::Instance()->IsOpened("DialogId")) {
     DialogHelper::SetupNextWindowForDialog();
 }
 
-// La afișarea dialogului
+// When displaying the dialog
 ImVec2 dialogSize = DialogHelper::GetStandardDialogSize();
 ImVec2 dialogPos = DialogHelper::GetStandardDialogPosition();
 if (ImGuiFileDialog::Instance()->Display("DialogId", 
                                       DialogHelper::GetRecommendedDialogFlags(), 
                                       dialogSize, 
                                       dialogPos)) {
-    // Procesează rezultatul...
+    // Process the result...
     ImGuiFileDialog::Instance()->Close();
 }
 */

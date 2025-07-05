@@ -12,21 +12,21 @@ LoginWindow::~LoginWindow() {
 }
 
 void LoginWindow::Draw() {
-    // Centrarea ferestrei
+    // Center the window
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->Size.x * 0.5f, viewport->Size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_FirstUseEver);
     
-    // Stilizarea ferestrei
+    // Window styling
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
     
     if (ImGui::Begin("PQC Wallet - Login", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse)) {
         
-        // Titlu
-        ImGui::PushFont(nullptr); // Folosește font-ul default, dar poți încărca unul custom
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("Autentificare").x) * 0.5f);
-        ImGui::Text("Autentificare");
+        // Title
+        ImGui::PushFont(nullptr); // Use default font, but you can load a custom one
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("Authentication").x) * 0.5f);
+        ImGui::Text("Authentication");
         ImGui::PopFont();
         
         ImGui::Separator();
@@ -71,7 +71,7 @@ void LoginWindow::Draw() {
             ImGui::InputText("##password", passwordBuffer, sizeof(passwordBuffer), ImGuiInputTextFlags_Password);
         }
         
-        // Checkbox pentru afișarea parolei
+        // Checkbox for showing password
         ImGui::Checkbox("Show password", &showPassword);
         
         ImGui::Spacing();
@@ -84,7 +84,7 @@ void LoginWindow::Draw() {
         
         ImGui::Spacing();
         
-        // Buton de login centrat
+        // Centered login button
         float buttonWidth = 120.0f;
         float buttonHeight = 30.0f;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) * 0.5f);
@@ -113,7 +113,7 @@ void LoginWindow::Draw() {
         
         ImGui::Spacing();
         
-        // Mesaj de status
+        // Status message
         if (loginAttempted && !loginSuccessful) {
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("Authentication failed...").x) * 0.5f);
             ImGui::TextColored(ImVec4(0.8f, 0.4f, 0.4f, 1.0f), "Authentication failed...");
