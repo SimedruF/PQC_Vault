@@ -7,7 +7,7 @@ build/
 *.o
 *.obj
 
-# Precompiled Headersyourusername
+# Precompiled Headers SimedruF
 *.gch
 *.pch
 
