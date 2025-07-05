@@ -18,9 +18,10 @@ A secure wallet application using Dear ImGui with post-quantum cryptography (Kyb
 - ✅ Kyber-768 encryption implementation
 - ✅ Login authentication with encrypted passwords
 - ✅ Multi-user support with dropdown selection
-- ✅ **WORKING**: Encrypted archive (img.enc) for secure file storage
-- ✅ **VERIFIED**: Archive window opens correctly after login
-- ✅ **NEW**: ImGuiFileDialog integration for file browsing
+- ✅ **WORKING**: Encrypted archives for secure file storage
+- ✅ **NEW**: Multiple archives support per user
+- ✅ **VERIFIED**: Archive selection and creation functionality
+- ✅ **IMPROVED**: ImGuiFileDialog integration for file browsing
 - ✅ Cross-platform compatibility (Linux tested)
 
 ## 🚀 Quick Start
@@ -29,12 +30,19 @@ A secure wallet application using Dear ImGui with post-quantum cryptography (Kyb
 - CMake 3.16+
 - OpenGL development libraries
 - OpenSSL development libraries
+- GLFW libraries and headers
+- C++17 compatible compiler
 - liboqs (automatically installed by setup script)
+
+See the detailed installation guide below for instructions on installing all dependencies.
 
 ### Installation
 ```bash
-git clone [your-repo-url]
+# Clone repository with all submodules
+git clone --recursive https://github.com/SimedruF/PQCWallet-Core.git
 cd PQCWallet
+
+# Make setup script executable and run it
 chmod +x setup.sh
 ./setup.sh
 ```
@@ -133,6 +141,38 @@ PQCWallet/
 See `ARCHIVE_GUIDE.md` for detailed archive usage instructions.
 See `IMGUI_FILE_DIALOG_GUIDE.md` for file dialog integration details.
 
+## 🗂️ Multiple Archives Support
+
+PQC Wallet acum suportă gestionarea mai multor arhive per utilizator:
+
+### Caracteristici de gestionare a arhivelor multiple
+- **Creare de arhive noi**: Creați arhive multiple pentru organizare mai bună
+- **Listare arhive**: Vizualizați toate arhivele disponibile pentru utilizatorul curent
+- **Selectare arhive**: Comutați între diferite arhive în funcție de necesități
+- **Nume personalizate**: Fiecare arhivă poate avea un nume unic pentru identificare ușoară
+
+### Utilizare
+
+1. După autentificare, veți vedea lista arhivelor disponibile
+2. Selectați arhiva dorită din listă
+3. Apăsați butonul "Open Selected Archive" pentru a deschide arhiva selectată
+4. Sau apăsați "Create New Archive" pentru a crea o arhivă nouă
+5. Introduceți un nume pentru noua arhivă și confirmați
+
+Fiecare arhivă este independentă și poate conține propriul set de fișiere, toate protejate de aceeași parolă de utilizator.
+
+### Format fișier
+Arhivele sunt stocate în directorul `archives/` cu următorul format:
+```
+archives/username_archivename.enc
+```
+
+De exemplu:
+```
+archives/john_img.enc       # Arhiva default "img" pentru utilizatorul "john"
+archives/john_documents.enc # Arhiva "documents" pentru utilizatorul "john"
+archives/john_photos.enc    # Arhiva "photos" pentru utilizatorul "john"
+```
 ## 🧪 Testing
 
 ### Build Test
@@ -179,6 +219,9 @@ See `TEST_RESULTS.md` for complete test verification.
 - GLFW 3.3+
 - OpenSSL 3.0+
 - liboqs 0.8+
+- Dear ImGui (included as submodule)
+- ImGuiFileDialog (included as submodule)
+- stb_image (included in third_party)
 
 ### Build Dependencies
 - CMake 3.16+
@@ -187,6 +230,186 @@ See `TEST_RESULTS.md` for complete test verification.
 - GLFW development headers
 - OpenSSL development headers
 
+## 📦 Detailed Installation Guide
+
+### Required Libraries Installation
+
+#### Debian/Ubuntu:
+```bash
+# Update package lists
+sudo apt update
+
+# Install base build tools
+sudo apt install -y build-essential git cmake
+
+# Install OpenGL dependencies
+sudo apt install -y libgl1-mesa-dev libglu1-mesa-dev
+
+# Install GLFW dependencies
+sudo apt install -y libglfw3-dev
+
+# Install OpenSSL
+sudo apt install -y libssl-dev
+
+# Install pkg-config (needed by build system)
+sudo apt install -y pkg-config
+```
+
+#### Fedora/CentOS/RHEL:
+```bash
+# Install base build tools
+sudo dnf install -y gcc g++ git cmake make
+
+# Install OpenGL dependencies
+sudo dnf install -y mesa-libGL-devel mesa-libGLU-devel
+
+# Install GLFW
+sudo dnf install -y glfw-devel
+
+# Install OpenSSL
+sudo dnf install -y openssl-devel
+
+# Install pkg-config
+sudo dnf install -y pkgconf
+```
+
+#### Arch Linux:
+```bash
+# Install base build tools
+sudo pacman -S base-devel git cmake
+
+# Install OpenGL dependencies
+sudo pacman -S mesa
+
+# Install GLFW
+sudo pacman -S glfw-x11 # or glfw-wayland for wayland users
+
+# Install OpenSSL
+sudo pacman -S openssl
+
+# Install pkg-config
+sudo pacman -S pkgconf
+```
+
+#### macOS (using Homebrew):
+```bash
+# Install Homebrew if not already installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install base build tools
+brew install cmake
+
+# Install GLFW
+brew install glfw
+
+# Install OpenSSL
+brew install openssl
+
+# Create symlinks for OpenSSL (required for finding OpenSSL during build)
+brew link openssl --force
+```
+
+### Installing liboqs (Open Quantum Safe)
+
+The setup script will install liboqs automatically, but if you want to install it manually:
+
+```bash
+# Clone liboqs repository
+git clone --branch main https://github.com/open-quantum-safe/liboqs.git
+
+# Create build directory
+cd liboqs && mkdir build && cd build
+
+# Configure with CMake
+cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON ..
+
+# Build
+make -j $(nproc)
+
+# Install (requires root privileges)
+sudo make install
+
+# Update dynamic linker
+sudo ldconfig
+```
+
+### Cloning the Repository with Submodules
+
+```bash
+# Clone the repository with all submodules
+git clone --recursive https://github.com/SimedruF/PQCWallet-Core.git
+
+# If you already cloned without --recursive:
+cd PQCWallet
+git submodule update --init --recursive
+```
+
+### Building from Source Manually
+
+If you prefer to build the project manually instead of using the setup script:
+
+```bash
+# Create and enter build directory
+mkdir -p build && cd build
+
+# Configure with CMake
+cmake ..
+
+# Build the project
+make -j$(nproc)
+
+# Return to project root
+cd ..
+```
+
+### CMake Build Options
+
+You can customize the build using the following CMake options:
+
+```bash
+# Build with debug symbols
+cmake -DCMAKE_BUILD_TYPE=Debug ..
+
+# Specify custom liboqs installation path
+cmake -Dliboqs_DIR=/path/to/liboqs/lib/cmake/liboqs ..
+
+# Specify custom OpenSSL path
+cmake -DOPENSSL_ROOT_DIR=/path/to/openssl ..
+
+# Build with sanitizers (for development only)
+cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON ..
+```
+
+### Troubleshooting
+
+#### Cannot Find liboqs
+If CMake cannot find liboqs, you may need to specify the path manually:
+```bash
+cmake -Dliboqs_DIR=/usr/local/lib/cmake/liboqs ..
+```
+
+#### OpenSSL Not Found
+On some systems, you may need to specify the OpenSSL path:
+```bash
+cmake -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl ..  # For macOS with Homebrew
+```
+
+#### GLFW Issues
+If you encounter GLFW-related errors:
+```bash
+# For Ubuntu/Debian
+sudo apt install libglfw3-dev xorg-dev
+
+# For macOS
+brew install glfw
+```
+
+#### Linker Errors
+If you get linker errors about missing libraries:
+```bash
+# Update dynamic linker cache
+sudo ldconfig
+```
 ## 🏗️ Architecture
 
 ```
@@ -227,9 +450,8 @@ Open source project for educational and development purposes.
 ## 🆘 Support
 
 For issues or questions:
-- Check `USAGE.md` for detailed instructions
-- Review `TEST_RESULTS.md` for troubleshooting
-- Examine `EXAMPLES.md` for code examples
+- [Open an issue on GitHub](https://github.com/SimedruF/PQCWallet-Core/issues) for support or bug reporting
+
 
 ---
 
