@@ -152,6 +152,8 @@ PQC Wallet protects your data today and in the quantum future.
 See the detailed installation guide below for instructions on installing all dependencies.
 
 ### Installation
+
+#### Linux/macOS
 ```bash
 # Clone repository with all submodules
 git clone --recursive https://github.com/SimedruF/PQCWallet-Core.git
@@ -162,9 +164,37 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
+#### Windows
+```batch
+# Clone repository with all submodules
+git clone --recursive https://github.com/SimedruF/PQCWallet-Core.git
+cd PQCWallet
+
+# Option 1: Use the setup wrapper (recommended)
+setup_windows.bat
+
+# Option 2: Run specific scripts manually
+build\scripts\setup_dependencies_windows.bat
+build\scripts\build_windows.bat
+```
+
+For detailed Windows build instructions, see: `build/docs/BUILD_WINDOWS.md`
+
 ### Running
+
+#### Linux/macOS
 ```bash
 ./run.sh
+```
+
+#### Windows
+```batch
+# From build directory
+build\PQCWallet.exe
+
+# Or using the wrapper script
+setup_windows.bat
+# (select option 2 to build and run)
 ```
 
 ### Font Setup (Optional)

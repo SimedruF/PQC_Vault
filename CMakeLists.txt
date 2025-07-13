@@ -9,17 +9,55 @@ find_package(OpenGL REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-# Find liboqs - try different methods
-find_path(OQS_INCLUDE_DIR oqs/oqs.h PATHS /usr/local/include)
-find_library(OQS_LIBRARY oqs PATHS /usr/local/lib)
+# Find liboqs - try different methods for cross-platform compatibility
+if(WIN32)
+    # Windows-specific paths
+    find_path(OQS_INCLUDE_DIR oqs/oqs.h PATHS 
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/liboqs/install/include
+        ${LIBOQS_ROOT}/include
+        $ENV{LIBOQS_ROOT}/include
+        $ENV{VCPKG_ROOT}/installed/x64-windows/include
+        /usr/local/include
+    )
+    find_library(OQS_LIBRARY 
+        NAMES oqs liboqs
+        PATHS 
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/liboqs/install/lib
+        ${LIBOQS_ROOT}/lib
+        $ENV{LIBOQS_ROOT}/lib
+        $ENV{VCPKG_ROOT}/installed/x64-windows/lib
+        /usr/local/lib
+    )
+else()
+    # Unix/Linux paths
+    find_path(OQS_INCLUDE_DIR oqs/oqs.h PATHS 
+        ${CMAKE_CURRENT_SOURCE_DIR}/liboqs/build/include
+        /usr/local/include
+        /usr/include
+    )
+    find_library(OQS_LIBRARY oqs PATHS 
+        ${CMAKE_CURRENT_SOURCE_DIR}/liboqs/build/lib
+        /usr/local/lib
+        /usr/lib
+    )
+endif()
 
 if(OQS_INCLUDE_DIR AND OQS_LIBRARY)
     set(OQS_FOUND TRUE)
     set(OQS_INCLUDE_DIRS ${OQS_INCLUDE_DIR})
     set(OQS_LIBRARIES ${OQS_LIBRARY})
     message(STATUS "Found liboqs: ${OQS_LIBRARY}")
+    message(STATUS "liboqs include dir: ${OQS_INCLUDE_DIR}")
 else()
-    message(FATAL_ERROR "liboqs not found. Please install it or build from source.")
+    message(FATAL_ERROR "liboqs not found. Please install it or build from source.
+    
+Windows users: 
+  - Try running setup_dependencies_windows.bat or build_liboqs_windows.bat
+  - Or install via vcpkg: vcpkg install liboqs:x64-windows
+
+Linux users:
+  - Install via package manager or build from source
+  - Make sure liboqs is installed in a standard location")
 endif()
 
 # Dear ImGui files
@@ -76,7 +114,47 @@ target_link_libraries(${PROJECT_NAME}
     OpenSSL::Crypto
 )
 
+# Platform-specific libraries and settings
+if(WIN32)
+    # Windows-specific libraries
+    target_link_libraries(${PROJECT_NAME} 
+        ws2_32
+        crypt32
+        advapi32
+    )
+    
+    # Set Windows-specific properties
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        WIN32_EXECUTABLE TRUE
+    )
+    
+    # Copy OpenSSL DLLs to output directory if using vcpkg
+    if(VCPKG_TARGET_TRIPLET)
+        find_file(OPENSSL_CRYPTO_DLL 
+            NAMES libcrypto-3-x64.dll libcrypto-1_1-x64.dll
+            PATHS $ENV{VCPKG_ROOT}/installed/x64-windows/bin
+        )
+        find_file(OPENSSL_SSL_DLL 
+            NAMES libssl-3-x64.dll libssl-1_1-x64.dll
+            PATHS $ENV{VCPKG_ROOT}/installed/x64-windows/bin
+        )
+        
+        if(OPENSSL_CRYPTO_DLL AND OPENSSL_SSL_DLL)
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${OPENSSL_CRYPTO_DLL}
+                    ${OPENSSL_SSL_DLL}
+                    $<TARGET_FILE_DIR:${PROJECT_NAME}>
+            )
+        endif()
+    endif()
+endif()
+
 # Compiler flags
 if(UNIX)
     target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra)
+elseif(WIN32)
+    target_compile_options(${PROJECT_NAME} PRIVATE /W3)
+    # Enable UTF-8 support
+    target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
 endif()

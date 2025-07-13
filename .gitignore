@@ -1,5 +1,14 @@
-# Build directory
-build/
+# Build directory (exclude build artifacts but keep scripts and docs)
+build/CMakeCache.txt
+build/CMakeFiles/
+build/Makefile
+build/cmake_install.cmake
+build/PQCWallet
+build/PQCWallet.exe
+build/*.exe
+build/*.dll
+build/*.so
+build/*.dylib
 
 # Compiled Object files
 *.slo
