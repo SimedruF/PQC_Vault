@@ -1,35 +1,61 @@
 # PQC Wallet - Post-Quantum Cryptography Wallet
 
-A secure wallet application using Dear ImGui with post-quantum cryptography (Kyber algorithm) for password protection.
+A secure wallet application using Dear ImGui with advanced post-quantum cryptography for password protection and encrypted file storage.
 
 ## 🔐 Security Features
 
 - **Post-Quantum Cryptography**: Uses Kyber-768 algorithm from liboqs
-- **Quantum-Safe**: Resistant to attacks from quantum computers
-- **Encrypted Storage**: All passwords encrypted at rest
+- **Enhanced Security v2.0**: Multi-layer encryption with AES-256-GCM + Kyber
+- **Quantum-Safe**: Resistant to attacks from quantum computers  
+- **Encrypted Storage**: All passwords encrypted with Scrypt key derivation
 - **Multi-User Support**: Each user has unique quantum-safe key pairs
-- **Encrypted Archive**: Secure file storage with post-quantum encryption
-- **Graphical File Browser**: ImGuiFileDialog for intuitive file management
+- **Encrypted Archives**: Secure file storage with post-quantum encryption
+- **Authentication Tags**: Integrity verification prevents file tampering
+- **Restrictive Permissions**: File system level protection (600/700 permissions)
 
-## ✅ Status: FULLY FUNCTIONAL & TESTED
+## ✅ Status: FULLY FUNCTIONAL & SECURITY ENHANCED
 
 - ✅ GUI application with Dear ImGui (docking branch)
-- ✅ First-time setup for password creation
-- ✅ Kyber-768 encryption implementation
-- ✅ Login authentication with encrypted passwords
+- ✅ **ENHANCED**: Multi-layer security implementation (v2.0)
+- ✅ First-time setup for password creation with strong key derivation
+- ✅ Kyber-768 + AES-256-GCM encryption implementation
+- ✅ Login authentication with enhanced encrypted passwords
 - ✅ Multi-user support with dropdown selection
 - ✅ **WORKING**: Encrypted archives for secure file storage
 - ✅ **NEW**: Multiple archives support per user
 - ✅ **VERIFIED**: Archive selection and creation functionality
 - ✅ **IMPROVED**: ImGuiFileDialog integration for file browsing
-- ✅ Cross-platform compatibility (Linux tested)
+- ✅ **SECURITY**: Legacy attack tools neutralized
+- ✅ Cross-platform compatibility (Linux tested, Windows/macOS supported)
 
-## 🚀 Quick Start
+## �️ Security Improvements v2.0
+
+### Enhanced Encryption Stack
+- **Key Derivation**: Scrypt with strong parameters (N=32768, r=8, p=1)
+- **Secret Key Protection**: AES-256-GCM encryption of Kyber secret keys
+- **Double Password Encryption**: Kyber + AES layers for maximum security
+- **Authentication Tags**: Integrity verification prevents tampering
+- **Random Salt & IV**: Unique cryptographic parameters per user
+- **File Permissions**: Restrictive OS-level access control
+
+### Security Comparison
+
+| Feature | Version 1.0 | Version 2.0 |
+|---------|-------------|-------------|
+| Secret Key Storage | ❌ Plaintext | ✅ AES-256-GCM Encrypted |
+| Password Encryption | ❌ XOR only | ✅ Kyber + AES-256-GCM |
+| Key Derivation | ❌ None | ✅ Scrypt (Strong params) |
+| Integrity Check | ❌ None | ✅ Authentication Tags |
+| Salt/IV | ❌ None | ✅ Random per user |
+| File Permissions | ❌ Default | ✅ Restrictive (600/700) |
+| Legacy Tools | ❌ Working | ✅ Neutralized |
+
+## �🚀 Quick Start
 
 ### Prerequisites
 - CMake 3.16+
 - OpenGL development libraries
-- OpenSSL development libraries
+- OpenSSL development libraries (for enhanced security)
 - GLFW libraries and headers
 - C++17 compatible compiler
 - liboqs (automatically installed by setup script)
@@ -52,26 +78,43 @@ chmod +x setup.sh
 ./run.sh
 ```
 
+### Security Migration
+For existing users, migrate to enhanced security:
+```bash
+# Compile and run the migration tool
+g++ -std=c++17 -I. migrate_security.cpp src/PasswordManager.cpp -loqs -lssl -lcrypto -o migrate_security
+./migrate_security
+
+# Test security improvements
+./demo_security.sh
+```
+
 ## 📁 Project Structure
 
 ```
 PQCWallet/
 ├── src/
 │   ├── main.cpp                 # Application entry point
-│   ├── LoginWindow.cpp/.h       # Login interface
-│   ├── WalletWindow.cpp/.h      # Main wallet interface
-│   ├── PasswordManager.cpp/.h   # Kyber encryption manager
-│   ├── CryptoArchive.cpp/.h     # Encrypted archive manager
-│   ├── ArchiveWindow.cpp/.h     # Archive GUI interface
+│   ├── LoginWindow.cpp/.h       # Login interface with user selection
+│   ├── WalletWindow.cpp/.h      # Main wallet interface with archive management
+│   ├── PasswordManager.cpp/.h   # Enhanced Kyber+AES encryption manager
+│   ├── CryptoArchive.cpp/.h     # Multi-archive encrypted storage manager
+│   ├── ArchiveWindow.cpp/.h     # Archive GUI interface with file management
 │   └── FirstTimeSetupWindow.cpp/.h # Initial setup interface
 ├── third_party/
-│   └── ImGuiFileDialog/         # File dialog library
-├── users/                       # Encrypted password storage
-├── archives/                    # Encrypted file archives (img.enc)
+│   └── ImGuiFileDialog/         # File dialog library for intuitive browsing
+├── users/                       # Enhanced encrypted password storage (v2.0)
+├── archives/                    # Multiple encrypted file archives per user
 ├── build/                       # Build artifacts
-├── setup.sh                     # Installation script
+├── tools/                       # Security analysis and migration tools
+├── docs/                        # Documentation and guides
+├── setup.sh                     # Enhanced installation script
 ├── run.sh                       # Application launcher
+├── migrate_security.cpp         # Security migration tool
+├── demo_security.sh            # Security demonstration script
 ├── README.md                    # This file
+├── SECURITY_IMPROVEMENTS.md     # Detailed security analysis
+├── PASSWORD_EXTRACTION_GUIDE.md # Security research documentation
 ├── USAGE.md                     # Detailed usage instructions
 ├── EXAMPLES.md                  # Code examples
 ├── ARCHIVE_GUIDE.md             # Archive usage guide
@@ -81,154 +124,241 @@ PQCWallet/
 
 ## 🔧 Technical Details
 
-### Post-Quantum Cryptography Implementation
-- **Algorithm**: Kyber-768 (NIST PQC standardized)
-- **Library**: liboqs (Open Quantum Safe)
-- **Key Size**: 1184 bytes public key, 2400 bytes secret key
-- **Security Level**: Equivalent to AES-192 against quantum attacks
+### Post-Quantum Cryptography Implementation v2.0
+- **Primary Algorithm**: Kyber-768 (NIST PQC standardized)
+- **Secondary Encryption**: AES-256-GCM for additional protection
+- **Library**: liboqs (Open Quantum Safe) + OpenSSL
+- **Key Derivation**: Scrypt with parameters N=32768, r=8, p=1
+- **Key Sizes**: 1184 bytes public key, 2400 bytes secret key
+- **Security Level**: Equivalent to AES-192 against quantum attacks + classical protection
+- **File Format**: Enhanced binary encrypted files (~4.8KB per user)
 
-### Password Security
+### Enhanced Password Security
 - **Storage**: Passwords never stored in plaintext
-- **Encryption**: XOR with Kyber-derived shared secret
-- **Verification**: Decryption-based authentication
-- **File Format**: Binary encrypted files (~4.7KB per user)
+- **Key Derivation**: Scrypt with random 256-bit salt
+- **Primary Encryption**: XOR with Kyber-derived shared secret
+- **Secondary Encryption**: AES-256-GCM with authentication tags
+- **Secret Key Protection**: Kyber secret keys encrypted with AES-256-GCM
+- **Verification**: Multi-layer decryption-based authentication
+- **Integrity**: Authentication tags prevent file tampering
+- **File Permissions**: Restrictive OS-level protection (600 for files, 700 for directories)
 
 ### GUI Implementation
 - **Framework**: Dear ImGui with docking support
 - **Graphics**: OpenGL 3.0+ with GLFW
-- **Windows**: Login, FirstTimeSetup, and Wallet interfaces
+- **Windows**: Enhanced Login, FirstTimeSetup, Wallet, and Archive interfaces
+- **Archive Management**: Multiple archives per user with intuitive switching
+- **File Operations**: Graphical file browser with ImGuiFileDialog
+- **User Experience**: Settings moved to TopBar, improved navigation
 - **Styling**: Custom dark theme with modern appearance
 
 ## 📋 Usage Workflow
 
+### Enhanced Security Workflow v2.0
 1. **First Run**: Application detects no users and shows setup window
-2. **User Creation**: Enter username and password, encrypted with Kyber
-3. **Login**: Select user from dropdown and enter password
-4. **Authentication**: Password decrypted and verified using Kyber
-5. **Wallet Access**: Main wallet interface opens upon successful login
-6. **Archive Access**: Click "Arhiva Securizata" to access encrypted file storage
+2. **User Creation**: Enter username and password, encrypted with enhanced Kyber+AES
+3. **Key Derivation**: Scrypt generates strong encryption keys from password
+4. **Secure Storage**: All cryptographic material stored with authentication tags
+5. **Login**: Select user from dropdown and enter password
+6. **Authentication**: Multi-layer password verification using Kyber+AES
+7. **Wallet Access**: Main wallet interface opens upon successful login
+8. **Archive Management**: Access multiple encrypted archives per user
+9. **Settings Access**: Use TopBar settings button for configuration
 
-## 🗃️ Encrypted Archive Features
+### Legacy User Migration
+- **Automatic Detection**: System detects old format files
+- **Secure Migration**: Backup and upgrade to enhanced security
+- **Verification**: Confirm migration success before removing backup
+- **Tool Neutralization**: Old extraction tools no longer work
 
-### Secure File Storage
-- **Post-Quantum Encryption**: Files encrypted with Kyber-768
-- **File Management**: Add, extract, and remove files securely
+## 🗃️ Enhanced Encrypted Archive Features
+
+### Secure File Storage v2.0
+- **Post-Quantum Encryption**: Files encrypted with Kyber-768 + AES-256-GCM
+- **Multiple Archives**: Create and manage multiple archives per user
+- **Archive Switching**: Seamlessly switch between different archives
+- **File Management**: Add, extract, preview, and remove files securely
 - **Integrity Verification**: SHA-256 hash verification for each file
-- **User Isolation**: Each user has their own encrypted archive
-- **Graphical File Browser**: ImGuiFileDialog for intuitive file selection
+- **User Isolation**: Each user has their own encrypted archive collection
+- **Graphical File Browser**: Enhanced ImGuiFileDialog for intuitive file selection
+- **Debug Capabilities**: Comprehensive diagnostic tools for troubleshooting
 
 ### Archive Operations
-- **Add Files**: Import files using graphical file picker
-- **Extract Files**: Export files using folder selection dialog
-- **File Preview**: View file contents (implementation in progress)
-- **Archive Statistics**: View total files, size, and last modified
-- **Drag & Drop**: Support for dragging files into archive (planned)
+- **Create Archives**: Create new archives with custom names
+- **Archive Selection**: Choose from available archives in dropdown list
+- **Add Files**: Import files using enhanced graphical file picker
+- **Extract Files**: Export files using improved folder selection dialog
+- **File Preview**: View text files and basic image information
+- **Archive Statistics**: View total files, size, and last modified time
+- **Password Management**: Change archive passwords securely
+- **Archive Diagnostics**: Built-in repair and diagnostic tools
 
-### New File Dialog Features
-- **Visual Navigation**: Browse filesystem graphically
-- **File Filtering**: Filter by file type
-- **Path Validation**: Automatic path validation
-- **Multi-platform**: Consistent experience across operating systems
+### Multiple Archives Management
+- **Archive Creation**: Create new archives for better organization
+- **Archive Listing**: View all available archives for current user
+- **Default Archive**: "img" archive created automatically for new users
+- **Archive Switching**: Load different archives without restarting application
+- **Isolated Storage**: Each archive has independent encryption and file storage
+- **Archive Naming**: Custom names for better organization (e.g., "Documents", "Photos", "Work")
 
-### Usage Example
+### Enhanced File Dialog Features
+- **Visual Navigation**: Browse filesystem with improved interface
+- **File Type Filtering**: Advanced filtering by file extensions
+- **Path Validation**: Automatic path validation and correction
+- **Multi-platform Support**: Consistent experience across operating systems
+- **Drag & Drop**: Enhanced drag and drop support (implementation in progress)
+- **Folder Selection**: Dedicated folder picker for extract operations
+- **Recent Paths**: Remember frequently used paths
+
+### Usage Examples
 ```bash
-# After successful login, click "Arhiva Securizata"
-# Click "Add Files" and use the file browser to select files
-# Files are stored in archives/username_img.enc
-# Use "Extract Selected" with folder picker to export files
+# After successful login, click "Open Secure Archive"
+# Select from available archives or create new ones
+# Click "Add Files" and use the enhanced file browser
+# Files stored in archives/username_archivename.enc
+# Use "Extract Selected" with improved folder picker
+# Switch between archives using the archive selection interface
 ```
 
-See `ARCHIVE_GUIDE.md` for detailed archive usage instructions.
-See `IMGUI_FILE_DIALOG_GUIDE.md` for file dialog integration details.
+### Multiple Archives Implementation Details
 
-## 🗂️ Multiple Archives Support
+#### Archive Organization
+Each user can create and manage multiple archives for better file organization:
 
-PQC Wallet acum suportă gestionarea mai multor arhive per utilizator:
-
-### Caracteristici de gestionare a arhivelor multiple
-- **Creare de arhive noi**: Creați arhive multiple pentru organizare mai bună
-- **Listare arhive**: Vizualizați toate arhivele disponibile pentru utilizatorul curent
-- **Selectare arhive**: Comutați între diferite arhive în funcție de necesități
-- **Nume personalizate**: Fiecare arhivă poate avea un nume unic pentru identificare ușoară
-
-### Utilizare
-
-1. După autentificare, veți vedea lista arhivelor disponibile
-2. Selectați arhiva dorită din listă
-3. Apăsați butonul "Open Selected Archive" pentru a deschide arhiva selectată
-4. Sau apăsați "Create New Archive" pentru a crea o arhivă nouă
-5. Introduceți un nume pentru noua arhivă și confirmați
-
-Fiecare arhivă este independentă și poate conține propriul set de fișiere, toate protejate de aceeași parolă de utilizator.
-
-### Format fișier
-Arhivele sunt stocate în directorul `archives/` cu următorul format:
 ```
 archives/username_archivename.enc
 ```
 
-De exemplu:
+Examples:
 ```
-archives/john_img.enc       # Arhiva default "img" pentru utilizatorul "john"
-archives/john_documents.enc # Arhiva "documents" pentru utilizatorul "john"
-archives/john_photos.enc    # Arhiva "photos" pentru utilizatorul "john"
-```
-## 🧪 Testing
-
-### Build Test
-```bash
-cd build && cmake .. && make
+archives/john_img.enc         # Default "img" archive for user "john"
+archives/john_documents.enc  # "documents" archive for user "john"  
+archives/john_photos.enc     # "photos" archive for user "john"
+archives/john_work.enc        # "work" archive for user "john"
 ```
 
-### Encryption Test
+#### Usage Workflow
+1. After authentication, you'll see the list of available archives
+2. Select the desired archive from the list
+3. Click "Open Selected Archive" to open the selected archive
+4. Or click "Create New Archive" to create a new archive
+5. Enter a name for the new archive and confirm
+
+Each archive is independent and can contain its own set of files, all protected by the same user password.
+
+#### Archive Management Features
+- **Independent Storage**: Each archive maintains separate file storage and metadata
+- **Seamless Switching**: Switch between archives without application restart
+- **Custom Organization**: Group files by purpose, project, or category
+- **Shared Security**: All archives use the same user authentication
+- **Scalable Design**: No limit on number of archives per user
+- **Efficient Navigation**: Quick archive selection from dropdown interface
+## 🧪 Enhanced Testing & Validation
+
+### Security Testing v2.0
 ```bash
-./test_encryption
+# Test enhanced security migration
+./migrate_security
+
+# Demonstrate security improvements  
+./demo_security.sh
+
+# Verify old tools are neutralized
+./extract_password  # Should fail with enhanced format
 ```
 
-### Archive Test
+### Build Testing
 ```bash
-./test_archive
+cd build && cmake .. && make -j$(nproc)
 ```
 
-### GUI Test
+### Encryption Testing
 ```bash
+# Test enhanced password encryption
+./test_encryption_v2
+
+# Test legacy compatibility
+./test_legacy_support
+```
+
+### Archive Testing
+```bash
+# Test multiple archives functionality
+./test_multi_archives
+
+# Test archive switching
+./test_archive_switching
+```
+
+### GUI Testing
+```bash
+# Test complete application
 ./run.sh
+
+# Test with multiple users
+./test_multi_user
 ```
 
 See `TEST_RESULTS.md` for complete test verification.
 
-## 🔍 Security Validation
+## 🔍 Enhanced Security Validation v2.0
 
+### Security Features Verification
+- **Multi-Layer Encryption**: Kyber-768 + AES-256-GCM verified working
+- **Enhanced Key Derivation**: Scrypt with strong parameters (N=32768, r=8, p=1)
+- **Authenticated Encryption**: AES-GCM provides both encryption and authentication
+- **Legacy Tool Neutralization**: Old extraction tools confirmed non-functional
+- **File Permissions**: Restrictive OS-level permissions (600/700) enforced
+- **Migration Safety**: Secure upgrade path from v1.0 to v2.0 format
 - **Quantum Resistance**: Kyber-768 provides security against quantum attacks
-- **Encrypted Files**: All password data encrypted at rest
-- **Encrypted Archive**: User files stored in quantum-safe archives
-- **Unique Keys**: Each user has independent Kyber key pair
-- **Access Control**: File-based user isolation
+- **Encrypted Files**: All password data encrypted with enhanced security
+- **Encrypted Archives**: User files stored in quantum-safe archives
+- **Unique Keys**: Each user has independent cryptographic material
+- **Access Control**: Enhanced file-based user isolation
 - **No Plaintext**: Passwords never stored or transmitted in plaintext
+- **Integrity Protection**: Authentication tags prevent file tampering
 
-## 📚 Documentation
+### Security Analysis Tools
+- **Migration Tool**: `migrate_security.cpp` - Safely upgrade legacy users
+- **Security Demo**: `demo_security.sh` - Demonstrate security improvements
+- **Analysis Tools**: Various tools for security research and validation
 
+## 📚 Enhanced Documentation
+
+### Primary Documentation
+- **README.md**: This comprehensive guide
+- **SECURITY_IMPROVEMENTS.md**: Detailed security analysis and improvements
+- **PASSWORD_EXTRACTION_GUIDE.md**: Security research documentation
 - **USAGE.md**: Detailed usage instructions
 - **EXAMPLES.md**: Code examples and API documentation
 - **TEST_RESULTS.md**: Complete test verification results
+- **ARCHIVE_GUIDE.md**: Multi-archive usage instructions
+- **IMGUI_FILE_DIALOG_GUIDE.md**: File dialog integration details
 
-## 🛠️ Dependencies
+### Security Documentation
+- Analysis of security vulnerabilities in v1.0
+- Detailed implementation of security improvements in v2.0
+- Migration procedures and compatibility considerations
+- Security testing methodologies and results
 
-### Runtime Dependencies
-- OpenGL 3.0+
-- GLFW 3.3+
-- OpenSSL 3.0+
-- liboqs 0.8+
+## 🛠️ Enhanced Dependencies
+
+### Runtime Dependencies v2.0
+- OpenGL 3.0+ (graphics rendering)
+- GLFW 3.3+ (window management)
+- **OpenSSL 3.0+** (enhanced cryptographic operations)
+- liboqs 0.8+ (post-quantum cryptography)
 - Dear ImGui (included as submodule)
 - ImGuiFileDialog (included as submodule)
 - stb_image (included in third_party)
 
 ### Build Dependencies
 - CMake 3.16+
-- C++17 compatible compiler
+- C++17 compatible compiler (GCC 8+, Clang 10+, MSVC 2019+)
 - OpenGL development headers
 - GLFW development headers
-- OpenSSL development headers
+- **OpenSSL development headers** (required for enhanced security)
+- pkg-config (for dependency resolution)
 
 ## 📦 Detailed Installation Guide
 
