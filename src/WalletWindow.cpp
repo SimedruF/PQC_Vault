@@ -931,12 +931,7 @@ void WalletWindow::ShowChangePasswordDialog() {
             } else if (oldPassword != userPassword) {
                 errorMsg = "Current password is incorrect.";
             } else {
-                // For now, password change is not implemented for all archives
-                // This would require updating all user's archive passwords
-                errorMsg = "Password change for all archives is not yet implemented. Please use the archive-specific password change from within each archive.";
-                
-                /*
-                // Change password using PasswordManager (TO BE IMPLEMENTED)
+                // Change password using PasswordManager
                 PasswordManager pm;
                 if (pm.ChangeMasterPassword(currentUser, oldPassword, newPassword)) {
                     // Update the stored password
@@ -959,9 +954,8 @@ void WalletWindow::ShowChangePasswordDialog() {
                     // Show success message (you might want to add a status message system)
                     std::cout << "Password changed successfully for user: " << currentUser << std::endl;
                 } else {
-                    errorMsg = "Failed to change password. Please try again.";
+                    errorMsg = "Failed to change password. Please try again or check console for details.";
                 }
-                */
             }
         }
         Settings::PopBlackButtonText();

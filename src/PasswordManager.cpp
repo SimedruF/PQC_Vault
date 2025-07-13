@@ -1,4 +1,5 @@
 #include "PasswordManager.h"
+#include "CryptoArchive.h"
 #include <oqs/oqs.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -595,5 +596,149 @@ void PasswordManager::EnsureUsersDirectory() const {
         std::filesystem::create_directories("users");
         // Set restrictive permissions on directory
         std::filesystem::permissions("users", std::filesystem::perms::owner_all);
+    }
+}
+
+bool PasswordManager::ChangeMasterPassword(const std::string& username, const std::string& oldPassword, const std::string& newPassword) {
+    std::cout << "\n---------- CHANGE MASTER PASSWORD ----------" << std::endl;
+    std::cout << "Changing password for user: " << username << std::endl;
+    
+    // First, verify the old password
+    if (!VerifyPassword(username, oldPassword)) {
+        std::cout << "Old password verification failed!" << std::endl;
+        std::cout << "----------------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    // Create new user entry with the new password
+    // We need to save the new password data to the user file
+    std::vector<uint8_t> salt = GenerateRandomBytes(SALT_SIZE);
+    std::vector<uint8_t> iv = GenerateRandomBytes(IV_SIZE);
+    
+    // Derive key from new password
+    std::vector<uint8_t> key = DeriveKey(newPassword, salt);
+    if (key.empty()) {
+        std::cout << "Failed to derive key from new password!" << std::endl;
+        std::cout << "----------------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    // Generate Kyber key pair
+    OQS_KEM* kem = OQS_KEM_new(OQS_KEM_alg_kyber_768);
+    if (!kem) {
+        std::cout << "Failed to initialize Kyber KEM!" << std::endl;
+        std::cout << "----------------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    std::vector<uint8_t> public_key(kem->length_public_key);
+    std::vector<uint8_t> secret_key(kem->length_secret_key);
+    
+    if (OQS_KEM_keypair(kem, public_key.data(), secret_key.data()) != OQS_SUCCESS) {
+        std::cout << "Failed to generate Kyber key pair!" << std::endl;
+        OQS_KEM_free(kem);
+        std::cout << "----------------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    // Encrypt the secret key with AES - use separate auth tag
+    std::vector<uint8_t> secretKeyAuthTag;
+    std::vector<uint8_t> encrypted_secret_key = AESEncrypt(secret_key, key, iv, secretKeyAuthTag);
+    if (encrypted_secret_key.empty()) {
+        std::cout << "Failed to encrypt secret key!" << std::endl;
+        OQS_KEM_free(kem);
+        std::cout << "----------------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    // Generate shared secret and ciphertext
+    std::vector<uint8_t> ciphertext(kem->length_ciphertext);
+    std::vector<uint8_t> shared_secret(kem->length_shared_secret);
+    
+    if (OQS_KEM_encaps(kem, ciphertext.data(), shared_secret.data(), public_key.data()) != OQS_SUCCESS) {
+        std::cout << "Failed to perform Kyber encapsulation!" << std::endl;
+        OQS_KEM_free(kem);
+        std::cout << "----------------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    // Double encrypt the password - use separate auth tags for each encryption
+    std::vector<uint8_t> password_data(newPassword.begin(), newPassword.end());
+    
+    // First encrypt with shared secret (XOR)
+    std::vector<uint8_t> xor_encrypted = XOREncrypt(newPassword, shared_secret);
+    
+    // Then encrypt with AES-GCM
+    std::vector<uint8_t> passwordAuthTag;
+    std::vector<uint8_t> double_encrypted = AESEncrypt(xor_encrypted, key, iv, passwordAuthTag);
+    if (double_encrypted.empty()) {
+        std::cout << "Failed to perform password encryption!" << std::endl;
+        OQS_KEM_free(kem);
+        std::cout << "----------------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    // Create the encrypted password structure - combine auth tags correctly
+    EncryptedPassword newPasswordData;
+    newPasswordData.salt = salt;
+    newPasswordData.iv = iv;
+    newPasswordData.ciphertext = ciphertext;
+    newPasswordData.public_key = public_key;
+    newPasswordData.encrypted_secret_key = encrypted_secret_key;
+    newPasswordData.encrypted_password = double_encrypted;
+    // Combine auth tags: password tag first, then secret key tag
+    newPasswordData.auth_tag = passwordAuthTag;
+    newPasswordData.auth_tag.insert(newPasswordData.auth_tag.end(), secretKeyAuthTag.begin(), secretKeyAuthTag.end());
+    newPasswordData.version = CURRENT_VERSION;
+    
+    // Save the new password data
+    if (!SaveEncryptedData(username, newPasswordData)) {
+        std::cout << "Failed to save new password data!" << std::endl;
+        OQS_KEM_free(kem);
+        std::cout << "----------------------------------------\n" << std::endl;
+        return false;
+    }
+    
+    OQS_KEM_free(kem);
+    
+    // Now find and update all user's archives
+    std::cout << "Finding user archives..." << std::endl;
+    
+    std::vector<std::string> userArchives = CryptoArchive::FindUserArchives(username);
+    std::cout << "Found " << userArchives.size() << " archives for user" << std::endl;
+    
+    bool allArchivesUpdated = true;
+    for (const std::string& archiveName : userArchives) {
+        std::cout << "Updating archive: " << archiveName << std::endl;
+        
+        // Create a CryptoArchive instance for this archive
+        CryptoArchive archive(username, archiveName);
+        
+        // Load the archive with the old password
+        if (!archive.LoadArchive(oldPassword)) {
+            std::cout << "Failed to load archive " << archiveName << " with old password!" << std::endl;
+            allArchivesUpdated = false;
+            continue;
+        }
+        
+        // Change the password for this archive
+        if (!archive.ChangePassword(oldPassword, newPassword)) {
+            std::cout << "Failed to change password for archive " << archiveName << std::endl;
+            allArchivesUpdated = false;
+            continue;
+        }
+        
+        std::cout << "Successfully updated archive: " << archiveName << std::endl;
+    }
+    
+    if (allArchivesUpdated) {
+        std::cout << "Successfully changed master password and updated all archives!" << std::endl;
+        std::cout << "----------------------------------------\n" << std::endl;
+        return true;
+    } else {
+        std::cout << "Master password changed but some archives could not be updated!" << std::endl;
+        std::cout << "You may need to manually update remaining archives." << std::endl;
+        std::cout << "----------------------------------------\n" << std::endl;
+        return false; // Return false if not all archives were updated
     }
 }
