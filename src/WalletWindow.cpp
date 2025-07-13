@@ -7,7 +7,7 @@
 #include <algorithm> // for std::find
 
 WalletWindow::WalletWindow() : shouldClose(false), showSettings(false), showArchive(false), 
-                             showCreateArchiveDialog(false), selectedArchiveIndex(-1) {
+                               showCreateArchiveDialog(false), selectedArchiveIndex(-1) {
     // Simplified constructor - transaction and balance related variables have been removed
     memset(newArchiveNameBuffer, 0, sizeof(newArchiveNameBuffer));
 }
@@ -82,7 +82,7 @@ void WalletWindow::Draw() {
         
         // Top bar
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
-        if (ImGui::BeginChild("TopBar", ImVec2(0, 60), true)) {
+        if (ImGui::BeginChild("TopBar", ImVec2(0, 90), true)) {
             ImGui::SetCursorPosY(15);
             ImGui::Indent(20);
             
@@ -92,6 +92,14 @@ void WalletWindow::Draw() {
             ImGui::Text("User: %s", currentUser.c_str());
             
             ImGui::NewLine();
+            
+            // Settings button în TopBar, înainte de butonul Logout
+            ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 150);
+            if (ImGui::Button("Settings", ImVec2(60, 30))) {
+                showSettings = true;
+            }
+            
+            ImGui::SameLine();
             ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 80);
             if (ImGui::Button("Logout", ImVec2(60, 30))) {
                 shouldClose = true;
@@ -212,10 +220,7 @@ void WalletWindow::DrawMainContent() {
     ImGui::Spacing();
     ImGui::Spacing();
     
-    // Settings
-    if (ImGui::Button("Settings", ImVec2(200, 40))) {
-        showSettings = true;
-    }
+    // Butonul "Settings" a fost mutat în TopBar
     
     ImGui::Spacing();
     ImGui::Spacing();
