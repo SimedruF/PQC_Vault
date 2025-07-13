@@ -3,6 +3,10 @@
 #include "imgui_impl_opengl3.h"
 #include <stdio.h>
 #include <iostream>
+#include <fstream>
+#include <vector>
+#include <filesystem>
+#include <algorithm>
 #include <GL/gl.h>
 #include <GLFW/glfw3.h>
 #include <chrono>
@@ -11,6 +15,8 @@
 #include "WalletWindow.h"
 #include "FirstTimeSetupWindow.h"
 #include "PasswordManager.h"
+#include "FontManager.h"
+#include "Settings.h"
 
 static void glfw_error_callback(int error, const char* description) {
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
@@ -48,31 +54,14 @@ int main() {
     // Keep ViewportsEnable disabled for now
     // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
-    // Setup Dear ImGui style
-    ImGui::StyleColorsDark();
+    // Setup Dear ImGui style - Apply theme from settings
+    Settings& settings = Settings::Instance();
+    settings.ApplyTheme();
     
-    // Style customization for a more beautiful interface
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 5.0f;
-    style.FrameRounding = 3.0f;
-    style.ScrollbarRounding = 3.0f;
-    style.GrabRounding = 3.0f;
-    style.WindowBorderSize = 1.0f;
-    style.FrameBorderSize = 1.0f;
-    
-    // Culori personalizate
-    ImVec4* colors = style.Colors;
-    colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.08f, 0.95f);
-    colors[ImGuiCol_Header] = ImVec4(0.2f, 0.6f, 0.8f, 0.8f);
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.3f, 0.7f, 0.9f, 0.9f);
-    colors[ImGuiCol_HeaderActive] = ImVec4(0.1f, 0.5f, 0.7f, 1.0f);
-    colors[ImGuiCol_TitleBg] = ImVec4(0.1f, 0.1f, 0.1f, 1.0f);
-    colors[ImGuiCol_TitleBgActive] = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
-    colors[ImGuiCol_FrameBg] = ImVec4(0.15f, 0.15f, 0.15f, 1.0f);
-    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
-    colors[ImGuiCol_FrameBgActive] = ImVec4(0.25f, 0.25f, 0.25f, 1.0f);
+    // Additional style customization moved to ApplyTheme() method
 
     // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
+    ImGuiStyle& style = ImGui::GetStyle();
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
@@ -82,10 +71,32 @@ int main() {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
+    // Initialize Font Manager
+    FontManager fontManager;
+    if (!fontManager.Initialize()) {
+        std::cerr << "Warning: Failed to initialize font manager, using default fonts" << std::endl;
+    }
+    
+    // Set a good default font if available
+    auto availableFonts = fontManager.GetAvailableFonts();
+    if (!availableFonts.empty()) {
+        // Prefer DejaVu Sans or other good fonts
+        for (const auto& fontName : {"DejaVuSans", "Roboto-Regular", "Default Large"}) {
+            if (std::find(availableFonts.begin(), availableFonts.end(), fontName) != availableFonts.end()) {
+                fontManager.SetActiveFont(fontName);
+                std::cout << "Set active font to: " << fontName << std::endl;
+                break;
+            }
+        }
+    }
+
     // Create windows
     LoginWindow loginWindow;
     WalletWindow walletWindow;
     FirstTimeSetupWindow setupWindow;
+    
+    // Set font manager for wallet window
+    walletWindow.SetFontManager(&fontManager);
     
     // Check if this is first-time setup
     PasswordManager pm;
@@ -100,6 +111,13 @@ int main() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        
+        // Check if theme has changed and reapply if needed
+        if (settings.HasThemeChanged()) {
+            printf("Theme change detected - reapplying theme\n");
+            settings.ApplyTheme();
+            settings.ClearThemeChanged();
+        }
 
         // Enable docking
         ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());

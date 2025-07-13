@@ -1,5 +1,6 @@
 #include "FirstTimeSetupWindow.h"
 #include "PasswordManager.h"
+#include "Settings.h"
 #include "imgui.h"
 #include <cstring>
 
@@ -14,7 +15,7 @@ void FirstTimeSetupWindow::Draw() {
     // Center the window
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->Size.x * 0.5f, viewport->Size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(500, 450), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(500, 500), ImGuiCond_Always);
     
     // Style the window
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
@@ -22,10 +23,14 @@ void FirstTimeSetupWindow::Draw() {
     
     if (ImGui::Begin("First Time Setup", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove)) {
         
+        // Get theme-appropriate colors
+        Settings& settings = Settings::Instance();
+        auto themeColors = settings.GetThemeColors();
+        
         // Header
         ImGui::PushFont(nullptr); // Use default font, but you can load a custom one
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("Welcome to PQC Wallet!").x) * 0.5f);
-        ImGui::Text("Welcome to PQC Wallet!");
+        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "Welcome to PQC Wallet!");
         ImGui::PopFont();
         
         ImGui::Separator();
@@ -71,22 +76,22 @@ void FirstTimeSetupWindow::Draw() {
         
         // Validation messages
         if (!errorMessage.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", errorMessage.c_str());
+            ImGui::TextColored(ImVec4(themeColors.errorText[0], themeColors.errorText[1], themeColors.errorText[2], themeColors.errorText[3]), "%s", errorMessage.c_str());
             ImGui::Spacing();
         }
         
         if (!successMessage.empty()) {
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", successMessage.c_str());
+            ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "%s", successMessage.c_str());
             ImGui::Spacing();
         }
         
         // Real-time password validation
         if (strlen(confirmPasswordBuffer) > 0) {
             if (std::string(passwordBuffer) != std::string(confirmPasswordBuffer)) {
-                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Passwords do not match!");
+                ImGui::TextColored(ImVec4(themeColors.errorText[0], themeColors.errorText[1], themeColors.errorText[2], themeColors.errorText[3]), "Passwords do not match!");
                 ImGui::Spacing();
             } else {
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Passwords match!");
+                ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "Passwords match!");
                 ImGui::Spacing();
             }
         }
@@ -97,6 +102,7 @@ void FirstTimeSetupWindow::Draw() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.3f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
+        Settings::PushBlackButtonText();
         
         bool canCreate = ValidateInput();
         if (!canCreate) {
@@ -121,6 +127,7 @@ void FirstTimeSetupWindow::Draw() {
             ImGui::EndDisabled();
         }
         
+        Settings::PopBlackButtonText();
         ImGui::PopStyleColor(3);
         
         ImGui::Spacing();

@@ -25,8 +25,26 @@ A secure wallet application using Dear ImGui with advanced post-quantum cryptogr
 - ✅ **NEW**: Multiple archives support per user
 - ✅ **VERIFIED**: Archive selection and creation functionality
 - ✅ **IMPROVED**: ImGuiFileDialog integration for file browsing
+- ✅ **NEW**: Advanced font management system with custom fonts
 - ✅ **SECURITY**: Legacy attack tools neutralized
 - ✅ Cross-platform compatibility (Linux tested, Windows/macOS supported)
+
+## 🔤 Font Management System v1.0
+
+### Customizable Typography
+- **Multiple Font Support**: System fonts and custom font loading
+- **Real-time Font Switching**: Change fonts without restart
+- **Dynamic Font Sizing**: Adjust font size from 8px to 32px
+- **Live Preview**: See changes before applying
+- **Font Auto-Detection**: Automatically finds system fonts
+- **Custom Font Directory**: Load fonts from `fonts/` folder
+
+### Font Features
+- **System Integration**: DejaVu Sans, Liberation Sans, Ubuntu fonts
+- **Custom Fonts**: Support for TTF font files
+- **Font Preview**: Real-time text preview with multiple samples
+- **Accessibility**: Adjustable sizing for better readability
+- **Cross-Platform**: Works on Linux, macOS, and Windows
 
 ## �️ Security Improvements v2.0
 
@@ -49,6 +67,77 @@ A secure wallet application using Dear ImGui with advanced post-quantum cryptogr
 | Salt/IV | ❌ None | ✅ Random per user |
 | File Permissions | ❌ Default | ✅ Restrictive (600/700) |
 | Legacy Tools | ❌ Working | ✅ Neutralized |
+
+## 🛡️ Post-Quantum Security
+
+### Simple Usage Guide
+PQC Wallet uses quantum-resistant algorithms to protect your data:
+
+1. **Login**: Your password is protected with quantum-safe encryption
+2. **File Storage**: Archives use hybrid encryption (classical + post-quantum)
+3. **Data Protection**: All sensitive data is encrypted with multiple layers
+
+### Encryption Algorithms Used
+
+#### Password Protection
+```
+User Password → Scrypt → AES-256-GCM + Kyber768
+```
+- **Scrypt**: Key derivation function resistant to hardware attacks
+- **AES-256-GCM**: 256-bit authenticated encryption (quantum-vulnerable but still strong)
+- **Kyber768**: NIST-selected post-quantum key encapsulation mechanism
+
+#### Archive Encryption
+```
+Archive Files → AES-256-CTR → Kyber768 KEM → Secure Storage
+```
+- **AES-256-CTR**: Fast file encryption for large data
+- **Kyber768**: Protects the AES keys against quantum attacks
+- **Authentication**: HMAC-SHA256 for data integrity
+
+#### Detailed Algorithm Specifications
+
+**Kyber768 (Post-Quantum)**:
+- Security Level: 192-bit (equivalent to AES-192)
+- Key Size: 2400 bytes (public), 2400 bytes (secret)
+- Ciphertext Size: 1088 bytes
+- Based on: Module Learning With Errors (M-LWE) problem
+- Quantum Resistance: ✅ Proven secure against quantum computers
+
+**Scrypt (Key Derivation)**:
+- Parameters: N=32768, r=8, p=1
+- Output: 256-bit derived key
+- Memory Cost: ~32MB (prevents ASIC attacks)
+- Time Cost: Configurable difficulty
+
+**AES-256-GCM (Symmetric)**:
+- Key Size: 256 bits
+- Block Size: 128 bits
+- Authentication: Built-in AEAD (Authenticated Encryption)
+- IV Size: 128 bits (randomly generated)
+
+### Security Levels
+
+| Component | Classical Security | Quantum Security |
+|-----------|-------------------|------------------|
+| Kyber768 | 192-bit | 192-bit ✅ |
+| AES-256 | 256-bit | 128-bit ⚠️ |
+| Scrypt | Configurable | Memory-hard ✅ |
+| HMAC-SHA256 | 256-bit | 128-bit ⚠️ |
+
+**Legend**:
+- ✅ = Quantum-resistant
+- ⚠️ = Quantum-vulnerable but computationally infeasible
+
+### Why Post-Quantum?
+
+Future quantum computers will break current encryption:
+- **RSA**: Vulnerable to Shor's algorithm
+- **ECC**: Vulnerable to Shor's algorithm  
+- **AES**: Strength halved by Grover's algorithm
+- **Kyber**: Immune to known quantum attacks
+
+PQC Wallet protects your data today and in the quantum future.
 
 ## �🚀 Quick Start
 
@@ -78,6 +167,18 @@ chmod +x setup.sh
 ./run.sh
 ```
 
+### Font Setup (Optional)
+For additional fonts, download popular font packages:
+```bash
+# Download and install popular fonts
+./download_fonts.sh
+
+# Or manually add TTF fonts to fonts/ directory
+cp your-font.ttf fonts/
+```
+
+Access font settings via `View → Font Settings` in the application.
+
 ### Security Migration
 For existing users, migrate to enhanced security:
 ```bash
@@ -100,9 +201,11 @@ PQCWallet/
 │   ├── PasswordManager.cpp/.h   # Enhanced Kyber+AES encryption manager
 │   ├── CryptoArchive.cpp/.h     # Multi-archive encrypted storage manager
 │   ├── ArchiveWindow.cpp/.h     # Archive GUI interface with file management
+│   ├── FontManager.cpp/.h       # Font management and customization system
 │   └── FirstTimeSetupWindow.cpp/.h # Initial setup interface
 ├── third_party/
 │   └── ImGuiFileDialog/         # File dialog library for intuitive browsing
+├── fonts/                       # Custom fonts directory (TTF files)
 ├── users/                       # Enhanced encrypted password storage (v2.0)
 ├── archives/                    # Multiple encrypted file archives per user
 ├── build/                       # Build artifacts
@@ -110,9 +213,11 @@ PQCWallet/
 ├── docs/                        # Documentation and guides
 ├── setup.sh                     # Enhanced installation script
 ├── run.sh                       # Application launcher
+├── download_fonts.sh            # Font download script
 ├── migrate_security.cpp         # Security migration tool
 ├── demo_security.sh            # Security demonstration script
 ├── README.md                    # This file
+├── FONT_GUIDE.md               # Font management guide
 ├── SECURITY_IMPROVEMENTS.md     # Detailed security analysis
 ├── PASSWORD_EXTRACTION_GUIDE.md # Security research documentation
 ├── USAGE.md                     # Detailed usage instructions
@@ -212,8 +317,8 @@ PQCWallet/
 
 ### Usage Examples
 ```bash
-# After successful login, click "Open Secure Archive"
-# Select from available archives or create new ones
+# After successful login, select from your archives in the main interface
+# Choose from available archives or create new ones via the menu
 # Click "Add Files" and use the enhanced file browser
 # Files stored in archives/username_archivename.enc
 # Use "Extract Selected" with improved folder picker

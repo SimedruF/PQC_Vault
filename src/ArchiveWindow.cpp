@@ -1,4 +1,5 @@
 #include "ArchiveWindow.h"
+#include "Settings.h"
 #include <imgui.h>
 #include "ImGuiFileDialogConfig.h" // Include custom configuration first
 #include "ImGuiFileDialog.h"
@@ -11,8 +12,7 @@
 ArchiveWindow::ArchiveWindow(const std::string& username) 
     : m_username(username), m_isVisible(false), m_isLoaded(false), m_selectedFile(-1),
       m_showAddFileDialog(false), m_showExtractDialog(false), m_showFileViewer(false),
-      m_showChangePasswordDialog(false), m_showOldPassword(false), m_showNewPassword(false),
-      m_previewType(PreviewType::NONE), m_statusMessageTime(0.0f) {
+      m_statusMessageTime(0.0f), m_previewType(PreviewType::NONE) {
     
     m_archive = std::make_unique<CryptoArchive>(username);
     
@@ -20,9 +20,6 @@ ArchiveWindow::ArchiveWindow(const std::string& username)
     memset(m_filePathBuffer, 0, sizeof(m_filePathBuffer));
     memset(m_fileNameBuffer, 0, sizeof(m_fileNameBuffer));
     memset(m_extractPathBuffer, 0, sizeof(m_extractPathBuffer));
-    memset(m_oldPasswordBuffer, 0, sizeof(m_oldPasswordBuffer));
-    memset(m_newPasswordBuffer, 0, sizeof(m_newPasswordBuffer));
-    memset(m_confirmPasswordBuffer, 0, sizeof(m_confirmPasswordBuffer));
     
     // Set default extract path
     std::filesystem::path defaultExtractPath = std::filesystem::current_path() / "extracted";
@@ -47,6 +44,10 @@ void ArchiveWindow::Render() {
     if (!m_isVisible) return;
     
     UpdateStatusMessage();
+    
+    // Get theme-appropriate colors
+    Settings& settings = Settings::Instance();
+    auto themeColors = settings.GetThemeColors();
     
     ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Secure Archive", &m_isVisible, ImGuiWindowFlags_MenuBar)) {
@@ -84,22 +85,16 @@ void ArchiveWindow::Render() {
                 }
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Change Password", "Ctrl+P")) {
-                m_showChangePasswordDialog = true;
-                memset(m_oldPasswordBuffer, 0, sizeof(m_oldPasswordBuffer));
-                memset(m_newPasswordBuffer, 0, sizeof(m_newPasswordBuffer));
-                memset(m_confirmPasswordBuffer, 0, sizeof(m_confirmPasswordBuffer));
-            }
-            ImGui::Separator();
             if (ImGui::MenuItem("Reset Archive", nullptr)) {
                 ImGui::OpenPopup("Reset Archive Confirmation");
             }
             if (ImGui::BeginPopupModal("Reset Archive Confirmation", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "WARNING: This will delete all files in the archive!");
+                ImGui::TextColored(ImVec4(themeColors.errorText[0], themeColors.errorText[1], themeColors.errorText[2], themeColors.errorText[3]), "WARNING: This will delete all files in the archive!");
                 ImGui::Text("Are you sure you want to reset the archive?");
                 ImGui::Text("This action cannot be undone.");
                 ImGui::Separator();
                 
+                Settings::PushBlackButtonText();
                 if (ImGui::Button("Yes, Reset Archive", ImVec2(180, 0))) {
                     if (m_archive->ResetArchive(m_password)) {
                         SetStatusMessage("Archive reset successfully!");
@@ -109,10 +104,13 @@ void ArchiveWindow::Render() {
                     }
                     ImGui::CloseCurrentPopup();
                 }
+                Settings::PopBlackButtonText();
                 ImGui::SameLine();
+                Settings::PushBlackButtonText();
                 if (ImGui::Button("Cancel", ImVec2(120, 0))) {
                     ImGui::CloseCurrentPopup();
                 }
+                Settings::PopBlackButtonText();
                 ImGui::EndPopup();
             }
             
@@ -164,7 +162,7 @@ void ArchiveWindow::Render() {
     
     // Status message
     if (m_statusMessageTime > 0.0f) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.2f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]));
         ImGui::Text("%s", m_statusMessage.c_str());
         ImGui::PopStyleColor();
         ImGui::Separator();
@@ -203,7 +201,8 @@ void ArchiveWindow::Render() {
             
             // Highlight on hover for a better experience
             if (ImGui::IsItemHovered() && m_selectedFile != i) {
-                ImU32 hover_color = ImGui::GetColorU32(ImVec4(0.7f, 0.7f, 0.7f, 0.2f));
+                // Use theme-appropriate hover color
+                ImU32 hover_color = ImGui::GetColorU32(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], 0.2f));
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, hover_color);
             }
             
@@ -215,8 +214,12 @@ void ArchiveWindow::Render() {
             
             // Display context menu
             if (ImGui::BeginPopup(("FileContextMenu_" + std::to_string(i)).c_str())) {
+                // Get fresh theme colors for menu rendering
+                Settings& menuSettings = Settings::Instance();
+                auto menuThemeColors = menuSettings.GetThemeColors();
+                
                 // Menu header with file icon
-                ImGui::TextColored(ImVec4(0.3f, 0.6f, 1.0f, 1.0f), "%s  %s", 
+                ImGui::TextColored(ImVec4(menuThemeColors.accentText[0], menuThemeColors.accentText[1], menuThemeColors.accentText[2], menuThemeColors.accentText[3]), "%s  %s", 
                                   GetFileTypeIcon(entry.name).c_str(), entry.name.c_str());
                 ImGui::Separator();
                 
@@ -344,17 +347,23 @@ void ArchiveWindow::Render() {
     
     // Bottom toolbar
     ImGui::Separator();
+    Settings::PushBlackButtonText();
     if (ImGui::Button("[+] Add Files")) {
         m_showAddFileDialog = true;
     }
+    Settings::PopBlackButtonText();
     ImGui::SameLine();
+    Settings::PushBlackButtonText();
     if (ImGui::Button("[>] Extract Selected") && m_selectedFile >= 0) {
         m_showExtractDialog = true;
     }
+    Settings::PopBlackButtonText();
     ImGui::SameLine();
+    Settings::PushBlackButtonText();
     if (ImGui::Button("[R] Refresh")) {
         RefreshFileList();
     }
+    Settings::PopBlackButtonText();
     
     ImGui::SameLine();
     auto stats = m_archive->GetStats();
@@ -384,10 +393,6 @@ void ArchiveWindow::Render() {
     
     if (m_showFileViewer) {
         ShowFileViewer();
-    }
-    
-    if (m_showChangePasswordDialog) {
-        ShowChangePasswordDialog();
     }
     
     ImGui::End();
@@ -678,8 +683,7 @@ void ArchiveWindow::ShowAddFileDialog() {
            // std::cout << "File dialog opened at path: " << config.path << std::endl;
         }
         // Display ImGuiFileDialog for file selection
-        ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-        ImVec2 dialogSize = GetStandardDialogSize(); //ImVec2(displaySize.x * 0.95f, displaySize.y * 0.8f);
+        ImVec2 dialogSize = GetStandardDialogSize();
         ImVec2 dialogPos = GetStandardDialogPosition();
 
         // Stabilize the dialog by setting the window size and position
@@ -721,6 +725,7 @@ void ArchiveWindow::ShowAddFileDialog() {
         }
 
         ImGui::SameLine();
+        Settings::PushBlackButtonText();
         if (ImGui::Button("[OK] Add File")) {
             std::string filePath = m_filePathBuffer;
             std::string fileName = m_fileNameBuffer;
@@ -792,11 +797,14 @@ void ArchiveWindow::ShowAddFileDialog() {
             
             std::cout << "----------------------------------------" << std::endl;
         }
+        Settings::PopBlackButtonText();
         
         ImGui::SameLine();
+        Settings::PushBlackButtonText();
         if (ImGui::Button("[C] Cancel")) {
             m_showAddFileDialog = false;
         }
+        Settings::PopBlackButtonText();
         
     // Display ImGuiFileDialog - use a specific size to make sure it's visible
     ImVec2 dialogSize = GetStandardDialogSize();
@@ -854,6 +862,7 @@ void ArchiveWindow::ShowExtractDialog() {
         ImGui::Text("Extract to:");
         ImGui::InputText("##extractpath", m_extractPathBuffer, sizeof(m_extractPathBuffer));
         
+        Settings::PushBlackButtonText();
         if (ImGui::Button("[F] Browse Folder")) {
             // Open ImGuiFileDialog for folder selection
             IGFD::FileDialogConfig config;
@@ -870,9 +879,11 @@ void ArchiveWindow::ShowExtractDialog() {
             ImGuiFileDialog::Instance()->OpenDialog("ChooseFolderDlgKey", "Choose Destination Folder", 
                 nullptr, config);  // nullptr pentru directoare
         }
+        Settings::PopBlackButtonText();
         
         ImGui::Separator();
         
+        Settings::PushBlackButtonText();
         if (ImGui::Button("[>] Extract")) {
             std::string extractPath = m_extractPathBuffer;
             
@@ -951,11 +962,14 @@ void ArchiveWindow::ShowExtractDialog() {
             }
             std::cout << "--------------------------------------\n" << std::endl;
         }
+        Settings::PopBlackButtonText();
         
         ImGui::SameLine();
+        Settings::PushBlackButtonText();
         if (ImGui::Button("[C] Cancel")) {
             m_showExtractDialog = false;
         }
+        Settings::PopBlackButtonText();
         
 
     
@@ -1042,6 +1056,10 @@ void ArchiveWindow::ShowFileViewer() {
         ImGui::SetNextWindowSize(previewSize, ImGuiCond_Appearing);
         
         if (ImGui::BeginPopupModal("Text Preview", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+            // Get theme-appropriate colors
+            Settings& settings = Settings::Instance();
+            auto themeColors = settings.GetThemeColors();
+            
             // Add menu bar
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
@@ -1054,7 +1072,7 @@ void ArchiveWindow::ShowFileViewer() {
             }
             
             // Indicator că textul poate fi selectat
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 1.0f, 1.0f), "You can select text and press Ctrl+C to copy");
+            ImGui::TextColored(ImVec4(themeColors.infoText[0], themeColors.infoText[1], themeColors.infoText[2], themeColors.infoText[3]), "You can select text and press Ctrl+C to copy");
             
             // Display text in a scrollable area
             ImGui::BeginChild("TextContent", ImVec2(0, -60), true, ImGuiWindowFlags_HorizontalScrollbar);
@@ -1069,24 +1087,28 @@ void ArchiveWindow::ShowFileViewer() {
             // Display information about file size
             ImGui::Text("Size: %s (%zu bytes)", FormatFileSize(m_textPreviewData.size()).c_str(), m_textPreviewData.size());
             
-            // Buton pentru copierea întregului text, cu feedback și stilizare
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.5f, 0.7f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.6f, 0.8f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.7f, 0.9f, 1.0f));
+            // Button for copying all text with button styling and theme-appropriate colors
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(themeColors.accentText[0] * 1.2f, themeColors.accentText[1] * 1.2f, themeColors.accentText[2] * 1.2f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(themeColors.accentText[0] * 1.4f, themeColors.accentText[1] * 1.4f, themeColors.accentText[2] * 1.4f, 1.0f));
+            Settings::PushBlackButtonText();
             
             if (ImGui::Button("[C] Copy All Text", ImVec2(160, 0))) {
                 ImGui::SetClipboardText(text.c_str());
                 SetStatusMessage("Text copied to clipboard!", 2.0f);
             }
             
+            Settings::PopBlackButtonText();
             ImGui::PopStyleColor(3);
             
             ImGui::SameLine();
             
-            // Buton pentru închidere
+            // Close button
+            Settings::PushBlackButtonText();
             if (ImGui::Button("Close", ImVec2(120, 0))) {
                 ResetPreview();
             }
+            Settings::PopBlackButtonText();
             
             ImGui::EndPopup();
         }
@@ -1102,6 +1124,10 @@ void ArchiveWindow::ShowFileViewer() {
         ImGui::SetNextWindowSize(previewSize, ImGuiCond_Appearing);
         
         if (ImGui::BeginPopupModal("Image Preview", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+            // Get theme-appropriate colors
+            Settings& settings = Settings::Instance();
+            auto themeColors = settings.GetThemeColors();
+            
             // Add menu bar
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
@@ -1119,7 +1145,7 @@ void ArchiveWindow::ShowFileViewer() {
             // Notă: Pentru previzualizarea propriu-zisă a imaginii ar trebui să folosim o bibliotecă
             // precum stb_image sau să integrăm OpenGL/texturi ImGui
             // Deocamdată afișăm un mesaj informativ
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Image preview is not fully implemented yet");
+            ImGui::TextColored(ImVec4(themeColors.warningText[0], themeColors.warningText[1], themeColors.warningText[2], themeColors.warningText[3]), "Image preview is not fully implemented yet");
             ImGui::TextWrapped("This feature requires loading the image data into a texture.");
             ImGui::TextWrapped("Image size: %zu bytes", m_imagePreviewData.size());
             
@@ -1130,10 +1156,12 @@ void ArchiveWindow::ShowFileViewer() {
             // Display information about file size
             ImGui::Text("Size: %s (%zu bytes)", FormatFileSize(m_imagePreviewData.size()).c_str(), m_imagePreviewData.size());
             
-            // Buton pentru închidere
+            // Close button
+            Settings::PushBlackButtonText();
             if (ImGui::Button("Close", ImVec2(120, 0))) {
                 ResetPreview();
             }
+            Settings::PopBlackButtonText();
             
             ImGui::EndPopup();
         }
@@ -1156,9 +1184,11 @@ void ArchiveWindow::ShowArchiveStats() {
         
         ImGui::Separator();
         
+        Settings::PushBlackButtonText();
         if (ImGui::Button("Close")) {
             ImGui::CloseCurrentPopup();
         }
+        Settings::PopBlackButtonText();
         
         ImGui::EndPopup();
     }
@@ -1428,6 +1458,10 @@ void ArchiveWindow::DisplaySelectableText(const std::string& text, const ImVec2&
     static bool showCopySuccessMsg = false;
     static float copyMsgTimer = 0.0f;
     
+    // Get theme-appropriate colors
+    Settings& settings = Settings::Instance();
+    auto themeColors = settings.GetThemeColors();
+    
     // Allocate or reallocate buffer if needed
     if (buffer_size < text.size() + 1) {
         delete[] buffer;
@@ -1439,8 +1473,8 @@ void ArchiveWindow::DisplaySelectableText(const std::string& text, const ImVec2&
     std::copy(text.begin(), text.end(), buffer);
     buffer[text.size()] = '\0';
     
-    // Display text as readonly input that allows selection
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.05f, 0.05f, 0.05f, 0.5f));
+    // Display text as readonly input that allows selection with theme-appropriate background
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(themeColors.accentText[0] * 0.1f, themeColors.accentText[1] * 0.1f, themeColors.accentText[2] * 0.1f, 0.5f));
     ImGui::InputTextMultiline("##TextPreviewContent", 
                              buffer, 
                              buffer_size,
@@ -1457,17 +1491,19 @@ void ArchiveWindow::DisplaySelectableText(const std::string& text, const ImVec2&
     
     // Button for copying all text with user feedback
     ImGui::PushID("CopyAllTextButton");
+    Settings::PushBlackButtonText();
     if (ImGui::Button("Copy All Text", ImVec2(140, 0))) {
         ImGui::SetClipboardText(text.c_str());
         showCopySuccessMsg = true;
         copyMsgTimer = 2.0f; // Show message for 2 seconds
     }
+    Settings::PopBlackButtonText();
     ImGui::PopID();
     
     // Show success message when text is copied via button
     if (showCopySuccessMsg) {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Text copied to clipboard!");
+        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "Text copied to clipboard!");
         
         // Update timer and hide message when time is up
         copyMsgTimer -= ImGui::GetIO().DeltaTime;
@@ -1475,117 +1511,6 @@ void ArchiveWindow::DisplaySelectableText(const std::string& text, const ImVec2&
             showCopySuccessMsg = false;
         }
     }
-}
-
-void ArchiveWindow::ShowChangePasswordDialog() {
-    ImGui::SetNextWindowSize(ImVec2(450, 300), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), 
-                           ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    
-    if (ImGui::Begin("Change Archive Password", &m_showChangePasswordDialog, 
-                    ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
-        
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Warning: Changing your password affects the crypto material");
-        ImGui::TextWrapped("Ensure you remember your new password, as there is no recovery option if you forget it.");
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-        
-        // Old password input
-        ImGui::Text("Current password:");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 120);
-        if (m_showOldPassword) {
-            ImGui::InputText("##oldpass", m_oldPasswordBuffer, sizeof(m_oldPasswordBuffer));
-        } else {
-            ImGui::InputText("##oldpass", m_oldPasswordBuffer, sizeof(m_oldPasswordBuffer), ImGuiInputTextFlags_Password);
-        }
-        ImGui::SameLine();
-        if (ImGui::Checkbox("Show##old", &m_showOldPassword)) {}
-        
-        ImGui::Spacing();
-        
-        // New password input
-        ImGui::Text("New password:");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 120);
-        if (m_showNewPassword) {
-            ImGui::InputText("##newpass", m_newPasswordBuffer, sizeof(m_newPasswordBuffer));
-        } else {
-            ImGui::InputText("##newpass", m_newPasswordBuffer, sizeof(m_newPasswordBuffer), ImGuiInputTextFlags_Password);
-        }
-        ImGui::SameLine();
-        if (ImGui::Checkbox("Show##new", &m_showNewPassword)) {}
-        
-        // Confirm new password
-        ImGui::Text("Confirm new password:");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 120);
-        if (m_showNewPassword) {
-            ImGui::InputText("##confirmpass", m_confirmPasswordBuffer, sizeof(m_confirmPasswordBuffer));
-        } else {
-            ImGui::InputText("##confirmpass", m_confirmPasswordBuffer, sizeof(m_confirmPasswordBuffer), ImGuiInputTextFlags_Password);
-        }
-        
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-        
-        static std::string errorMsg;
-        
-        // Show any error message
-        if (!errorMsg.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", errorMsg.c_str());
-            ImGui::Spacing();
-        }
-        
-        // Calculate button positions for centering
-        float windowWidth = ImGui::GetWindowWidth();
-        float buttonsWidth = 300; // Total width of both buttons plus spacing
-        float startX = (windowWidth - buttonsWidth) * 0.5f;
-        
-        ImGui::SetCursorPosX(startX);
-        if (ImGui::Button("Change Password", ImVec2(140, 30))) {
-            std::string oldPassword(m_oldPasswordBuffer);
-            std::string newPassword(m_newPasswordBuffer);
-            std::string confirmPassword(m_confirmPasswordBuffer);
-            
-            // Validate inputs
-            if (oldPassword.empty() || newPassword.empty() || confirmPassword.empty()) {
-                errorMsg = "All fields are required.";
-            } else if (newPassword != confirmPassword) {
-                errorMsg = "New passwords do not match.";
-            } else if (newPassword.length() < 8) {
-                errorMsg = "New password must be at least 8 characters.";
-            } else {
-                // Attempt to change the password
-                if (m_archive->ChangePassword(oldPassword, newPassword)) {
-                    // Update the stored password
-                    m_password = newPassword;
-                    SetStatusMessage("Password changed successfully!");
-                    
-                    // Clear fields and close dialog
-                    memset(m_oldPasswordBuffer, 0, sizeof(m_oldPasswordBuffer));
-                    memset(m_newPasswordBuffer, 0, sizeof(m_newPasswordBuffer));
-                    memset(m_confirmPasswordBuffer, 0, sizeof(m_confirmPasswordBuffer));
-                    errorMsg.clear();
-                    m_showChangePasswordDialog = false;
-                } else {
-                    errorMsg = "Failed to change password. Current password may be incorrect.";
-                }
-            }
-        }
-        
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(startX + 160);
-        if (ImGui::Button("Cancel", ImVec2(140, 30))) {
-            // Clear fields and error message
-            memset(m_oldPasswordBuffer, 0, sizeof(m_oldPasswordBuffer));
-            memset(m_newPasswordBuffer, 0, sizeof(m_newPasswordBuffer));
-            memset(m_confirmPasswordBuffer, 0, sizeof(m_confirmPasswordBuffer));
-            errorMsg.clear();
-            m_showChangePasswordDialog = false;
-        }
-    }
-    
-    ImGui::End();
 }
 
 bool ArchiveWindow::LoadArchive(const std::string& archiveName, const std::string& password) {

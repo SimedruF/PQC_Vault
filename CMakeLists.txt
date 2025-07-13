@@ -49,6 +49,8 @@ set(SOURCES
     src/FirstTimeSetupWindow.cpp
     src/CryptoArchive.cpp
     src/ArchiveWindow.cpp
+    src/FontManager.cpp
+    src/Settings.cpp
     ${IMGUI_SOURCES}
     ${IMGUI_FILE_DIALOG_SOURCES}
 )
