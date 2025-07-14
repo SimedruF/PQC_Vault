@@ -197,6 +197,47 @@ setup_windows.bat
 # (select option 2 to build and run)
 ```
 
+### Creating Desktop Shortcut
+
+#### Linux/macOS
+```bash
+# Create desktop shortcut after building the application
+./create_desktop_shortcut.sh
+```
+
+This creates:
+- Desktop shortcut for easy access
+- Applications menu entry
+- Proper file associations
+
+#### Windows
+```batch
+# Create desktop shortcut after building the application
+create_desktop_shortcut_windows.bat
+
+# Or use the wrapper script
+setup_windows.bat
+# (select option 5 to create shortcut)
+```
+
+This creates a desktop shortcut with proper Windows integration.
+
+### Generating Custom Icon
+
+#### Automatic Icon Generation (recommended)
+```bash
+# Generate a professional PQC-themed icon
+./generate_icon.sh
+```
+
+#### Simple Icon Creation (fallback)
+```bash
+# Create a simple SVG-based icon (no ImageMagick required)
+./create_simple_icon.sh
+```
+
+Both scripts create multiple icon sizes and formats for optimal cross-platform compatibility.
+
 ### Font Setup (Optional)
 For additional fonts, download popular font packages:
 ```bash
