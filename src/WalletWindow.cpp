@@ -10,7 +10,7 @@
 
 WalletWindow::WalletWindow() : shouldClose(false), showSettings(false), showArchive(false), 
                                showCreateArchiveDialog(false), showFontSettings(false),
-                               showChangePasswordDialog(false),
+                               showChangePasswordDialog(false), showDatabaseManager(false),
                                selectedArchiveIndex(-1), m_fontManager(nullptr), 
                                selectedFontIndex(0), fontSizeSlider(16.0f), 
                                showOldPassword(false), showNewPassword(false) {
@@ -45,6 +45,20 @@ void WalletWindow::SetUserInfo(const std::string& username, const std::string& p
     
     currentUser = username;
     userPassword = password;
+    
+    // Initialize encrypted database
+    std::cout << "Initializing encrypted database..." << std::endl;
+    std::string db_path = "users/" + username + "_database.pqc";
+    encryptedDatabase = std::make_shared<EncryptedDatabase>(db_path, password);
+    
+    if (!encryptedDatabase->initialize()) {
+        std::cerr << "Warning: Failed to initialize encrypted database" << std::endl;
+        // Continue without database functionality
+    } else {
+        std::cout << "[OK] Encrypted database initialized successfully" << std::endl;
+        // Initialize database manager window
+        databaseManagerWindow = std::make_unique<DatabaseManagerWindow>(encryptedDatabase);
+    }
     
     // Initialize archive window
     std::cout << "Creating ArchiveWindow instance..." << std::endl;
@@ -212,6 +226,11 @@ void WalletWindow::Draw() {
     if (archiveWindow) {
         archiveWindow->Render();
     }
+    
+    // Database Manager window
+    if (databaseManagerWindow) {
+        databaseManagerWindow->render();
+    }
 }
 
 void WalletWindow::DrawMainContent() {
@@ -287,6 +306,16 @@ void WalletWindow::DrawMainContent() {
         LoadUserArchives();
     }
     Settings::PopBlackButtonText();
+    
+    ImGui::SameLine();
+    
+    Settings::PushBlackButtonText();
+    if (ImGui::Button("[DB] Database Manager", ImVec2(150, 30))) {
+        if (databaseManagerWindow) {
+            databaseManagerWindow->setVisible(true);
+        }
+    }
+    Settings::PopBlackButtonText();
     ImGui::EndGroup();
     
     ImGui::Spacing();
@@ -308,7 +337,7 @@ void WalletWindow::DrawMainContent() {
         ImGui::SetCursorPosX(10);
         
         // Usage guide section
-        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "🛡️ How Your Data is Protected:");
+        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "[SHIELD] How Your Data is Protected:");
         ImGui::SetCursorPosX(15);
         ImGui::TextColored(ImVec4(themeColors.primaryText[0], themeColors.primaryText[1], themeColors.primaryText[2], themeColors.primaryText[3]), "• Login: Password protected with quantum-safe encryption");
         ImGui::SetCursorPosX(15);
@@ -320,7 +349,7 @@ void WalletWindow::DrawMainContent() {
         ImGui::SetCursorPosX(10);
         
         // Algorithms section
-        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "🔐 Encryption Algorithms:");
+        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "[LOCK] Encryption Algorithms:");
         ImGui::SetCursorPosX(15);
         ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ Kyber768: Post-quantum key encapsulation (192-bit security)");
         ImGui::SetCursorPosX(15);
@@ -342,7 +371,7 @@ void WalletWindow::DrawMainContent() {
         ImGui::SetCursorPosX(15);
         ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ File permissions secured (600/700)");
         ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.warningText[0], themeColors.warningText[1], themeColors.warningText[2], themeColors.warningText[3]), "⚠ Enhanced Security v2.0 - Production Ready");
+        ImGui::TextColored(ImVec4(themeColors.warningText[0], themeColors.warningText[1], themeColors.warningText[2], themeColors.warningText[3]), "[!] Enhanced Security v2.0 - Production Ready");
         
         // Add a help section at the bottom
         ImGui::Spacing();
@@ -379,7 +408,7 @@ void WalletWindow::DrawSettings() {
         Settings& settings = Settings::Instance();
         auto themeColors = settings.GetThemeColors();
         
-        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "⚙️ PQC Wallet Configuration");
+        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "[GEAR] PQC Wallet Configuration");
         ImGui::Separator();
         ImGui::Spacing();
         
@@ -395,7 +424,7 @@ void WalletWindow::DrawSettings() {
         ImGui::Spacing();
         
         // Backup Settings
-        ImGui::TextColored(ImVec4(themeColors.secondaryText[0], themeColors.secondaryText[1], themeColors.secondaryText[2], themeColors.secondaryText[3]), "💾 Backup & Recovery");
+        ImGui::TextColored(ImVec4(themeColors.secondaryText[0], themeColors.secondaryText[1], themeColors.secondaryText[2], themeColors.secondaryText[3]), "[SAVE] Backup & Recovery");
         ImGui::Checkbox("Automatic backup", &tempEnableAutoBackup);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Automatically create encrypted backups of archives");
@@ -412,7 +441,7 @@ void WalletWindow::DrawSettings() {
         ImGui::Spacing();
         
         // Security Settings
-        ImGui::TextColored(ImVec4(themeColors.secondaryText[0], themeColors.secondaryText[1], themeColors.secondaryText[2], themeColors.secondaryText[3]), "🛡️ Security Level");
+        ImGui::TextColored(ImVec4(themeColors.secondaryText[0], themeColors.secondaryText[1], themeColors.secondaryText[2], themeColors.secondaryText[3]), "[SHIELD] Security Level");
         ImGui::RadioButton("Standard##security", &tempSecurityLevel, 1);
         ImGui::SameLine();
         if (ImGui::IsItemHovered()) {
@@ -795,7 +824,7 @@ void WalletWindow::DrawFontSettings() {
         ImGui::Text("0123456789 !@#$%%^&*()_+-=[]{}|;':\",./<>?");
         ImGui::Text("PQC Wallet - Post-Quantum Cryptography");
         ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ This is how the interface text will look");
-        ImGui::TextColored(ImVec4(themeColors.errorText[0], themeColors.errorText[1], themeColors.errorText[2], themeColors.errorText[3]), "⚠ Warning messages will appear like this");
+        ImGui::TextColored(ImVec4(themeColors.errorText[0], themeColors.errorText[1], themeColors.errorText[2], themeColors.errorText[3]), "[!] Warning messages will appear like this");
         
         ImGui::EndChild();
         

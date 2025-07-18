@@ -89,12 +89,42 @@ set(SOURCES
     src/ArchiveWindow.cpp
     src/FontManager.cpp
     src/Settings.cpp
+    src/EncryptedDatabase.cpp
+    src/DatabaseManagerWindow.cpp
     ${IMGUI_SOURCES}
     ${IMGUI_FILE_DIALOG_SOURCES}
 )
 
 # Create executable
 add_executable(${PROJECT_NAME} ${SOURCES})
+
+# Create test executable for encrypted database
+add_executable(test_encrypted_database 
+    test_encrypted_database.cpp
+    src/EncryptedDatabase.cpp
+)
+
+# Include directories for test
+target_include_directories(test_encrypted_database PRIVATE
+    ${OQS_INCLUDE_DIRS}
+    src
+)
+
+# Link libraries for test
+target_link_libraries(test_encrypted_database 
+    ${OQS_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
+
+# Platform-specific libraries for test
+if(WIN32)
+    target_link_libraries(test_encrypted_database 
+        ws2_32
+        crypt32
+        advapi32
+    )
+endif()
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE

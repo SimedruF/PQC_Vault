@@ -136,24 +136,24 @@ void LoginWindow::Draw() {
         ImGui::Spacing();
         
         // Security header
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("🛡️ Post-Quantum Security").x) * 0.5f);
-        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "🛡️ Post-Quantum Security");
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("[SHIELD] Post-Quantum Security").x) * 0.5f);
+        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "[SHIELD] Post-Quantum Security");
         
         ImGui::Spacing();
         
         // Security details in a compact format
         ImGui::SetCursorPosX(10);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ Kyber768: Quantum-resistant encryption");
+        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "[+] Kyber768: Quantum-resistant encryption");
         ImGui::SetCursorPosX(10);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ Scrypt: Hardware attack protection");
+        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "[+] Scrypt: Hardware attack protection");
         ImGui::SetCursorPosX(10);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ AES-256-GCM: Password encryption");
+        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "[+] AES-256-GCM: Password encryption");
         
         ImGui::Spacing();
         
         // Status indicator
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("🔐 Your data is protected against quantum computers").x) * 0.5f);
-        ImGui::TextColored(ImVec4(themeColors.infoText[0], themeColors.infoText[1], themeColors.infoText[2], themeColors.infoText[3]), "🔐 Your data is protected against quantum computers");
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("[LOCK] Your data is protected against quantum computers").x) * 0.5f);
+        ImGui::TextColored(ImVec4(themeColors.infoText[0], themeColors.infoText[1], themeColors.infoText[2], themeColors.infoText[3]), "[LOCK] Your data is protected against quantum computers");
         
         // Add tooltip for more technical details
         if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {

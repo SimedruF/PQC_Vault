@@ -4,6 +4,8 @@
 #include "ArchiveWindow.h"
 #include "FontManager.h"
 #include "Settings.h"
+#include "EncryptedDatabase.h"
+#include "DatabaseManagerWindow.h"
 
 class WalletWindow {
 public:
@@ -24,6 +26,7 @@ private:
     bool showCreateArchiveDialog;
     bool showFontSettings;
     bool showChangePasswordDialog;
+    bool showDatabaseManager;
     
     // Change password dialog state
     char oldPasswordBuffer[256];
@@ -54,6 +57,10 @@ private:
     
     // Archive management
     std::unique_ptr<ArchiveWindow> archiveWindow;
+    
+    // Database management
+    std::shared_ptr<EncryptedDatabase> encryptedDatabase;
+    std::unique_ptr<DatabaseManagerWindow> databaseManagerWindow;
     
     // Load the list of user archives
     void LoadUserArchives();

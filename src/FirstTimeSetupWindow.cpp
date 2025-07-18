@@ -138,8 +138,8 @@ void FirstTimeSetupWindow::Draw() {
         ImGui::Spacing();
         
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.8f, 1.0f, 1.0f));
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("🔒 Your password will be encrypted using Kyber-768").x) * 0.5f);
-        ImGui::Text("🔒 Your password will be encrypted using Kyber-768");
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("[LOCK] Your password will be encrypted using Kyber-768").x) * 0.5f);
+        ImGui::Text("[LOCK] Your password will be encrypted using Kyber-768");
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("Post-Quantum Cryptography Algorithm").x) * 0.5f);
         ImGui::Text("Post-Quantum Cryptography Algorithm");
         ImGui::PopStyleColor();
