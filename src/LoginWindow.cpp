@@ -10,17 +10,18 @@ LoginWindow::LoginWindow() : loginAttempted(false), loginSuccessful(false), show
 }
 
 LoginWindow::~LoginWindow() {
+    ClearBuffers();
+    password.clear();
 }
 
 void LoginWindow::Draw() {
     // Center the window
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->Size.x * 0.5f, viewport->Size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(500, 500), ImGuiCond_FirstUseEver);
-    
-    // Window styling
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
+    const auto& metrics = Settings::Metrics();
+    ImGui::SetNextWindowSize(
+        ImVec2(metrics.authWindowWidth, metrics.loginWindowHeight),
+        ImGuiCond_Always);
     
     if (ImGui::Begin("PQC Wallet - Login", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse)) {
         
@@ -70,11 +71,12 @@ void LoginWindow::Draw() {
         // Password field
         ImGui::Text("Password:");
         ImGui::SetNextItemWidth(-1);
-        if (showPassword) {
-            ImGui::InputText("##password", passwordBuffer, sizeof(passwordBuffer));
-        } else {
-            ImGui::InputText("##password", passwordBuffer, sizeof(passwordBuffer), ImGuiInputTextFlags_Password);
+        ImGuiInputTextFlags passwordFlags = ImGuiInputTextFlags_EnterReturnsTrue;
+        if (!showPassword) {
+            passwordFlags |= ImGuiInputTextFlags_Password;
         }
+        const bool enterPressed = ImGui::InputText(
+            "##password", passwordBuffer, sizeof(passwordBuffer), passwordFlags);
         
         // Checkbox for showing password
         ImGui::Checkbox("Show password", &showPassword);
@@ -90,33 +92,28 @@ void LoginWindow::Draw() {
         ImGui::Spacing();
         
         // Centered login button
-        float buttonWidth = 120.0f;
-        float buttonHeight = 30.0f;
+        const float buttonWidth = 140.0f;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) * 0.5f);
-        
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.3f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
-        Settings::PushBlackButtonText();
-        
-        if (ImGui::Button("Login", ImVec2(buttonWidth, buttonHeight))) {
+        const bool loginButtonPressed =
+            settings.Button("Login", Settings::ButtonVariant::Primary,
+                            buttonWidth, Settings::Metrics().largeButtonHeight);
+        if (enterPressed || loginButtonPressed) {
             username = std::string(usernameBuffer);
-            password = std::string(passwordBuffer);
+            const bool passwordCaptured = password.assign(passwordBuffer);
+            SecureMemory::Cleanse(passwordBuffer);
             loginAttempted = true;
             
             // Verify password using PasswordManager
             PasswordManager pm;
-            if (pm.VerifyPassword(username, password)) {
+            if (passwordCaptured && pm.VerifyPassword(username, password.get())) {
                 loginSuccessful = true;
                 errorMessage.clear();
             } else {
                 loginSuccessful = false;
+                password.clear();
                 errorMessage = "Invalid username or password!";
             }
         }
-        
-        Settings::PopBlackButtonText();
-        ImGui::PopStyleColor(3);
         
         ImGui::Spacing();
         
@@ -129,46 +126,9 @@ void LoginWindow::Draw() {
             ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "Login successful!");
         }
         
-        ImGui::Spacing();
-        ImGui::Separator();
-        
-        // Enhanced security information section
-        ImGui::Spacing();
-        
-        // Security header
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("[SHIELD] Post-Quantum Security").x) * 0.5f);
-        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "[SHIELD] Post-Quantum Security");
-        
-        ImGui::Spacing();
-        
-        // Security details in a compact format
-        ImGui::SetCursorPosX(10);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "[+] Kyber768: Quantum-resistant encryption");
-        ImGui::SetCursorPosX(10);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "[+] Scrypt: Hardware attack protection");
-        ImGui::SetCursorPosX(10);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "[+] AES-256-GCM: Password encryption");
-        
-        ImGui::Spacing();
-        
-        // Status indicator
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("[LOCK] Your data is protected against quantum computers").x) * 0.5f);
-        ImGui::TextColored(ImVec4(themeColors.infoText[0], themeColors.infoText[1], themeColors.infoText[2], themeColors.infoText[3]), "[LOCK] Your data is protected against quantum computers");
-        
-        // Add tooltip for more technical details
-        if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
-            ImGui::Text("Security Technology Details:");
-            ImGui::Separator();
-            ImGui::Text("• Kyber768: NIST-approved quantum-resistant algorithm");
-            ImGui::Text("• 192-bit security level against quantum attacks");
-            ImGui::Text("• Multi-layer encryption protects all sensitive data");
-            ImGui::Text("• Future-proof against quantum computer threats");
-            ImGui::EndTooltip();
-        }
     }
     
     ImGui::End();
-    ImGui::PopStyleVar(2);
 }
 
 void LoginWindow::LoadAvailableUsers() {
@@ -178,6 +138,12 @@ void LoginWindow::LoadAvailableUsers() {
 
 void LoginWindow::ClearBuffers() {
     memset(usernameBuffer, 0, sizeof(usernameBuffer));
-    memset(passwordBuffer, 0, sizeof(passwordBuffer));
+    SecureMemory::Cleanse(passwordBuffer);
     errorMessage.clear();
+}
+
+void LoginWindow::ResetLoginStatus() {
+    loginSuccessful = false;
+    password.clear();
+    SecureMemory::Cleanse(passwordBuffer);
 }

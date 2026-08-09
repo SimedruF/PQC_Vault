@@ -17,9 +17,17 @@
 #include "PasswordManager.h"
 #include "FontManager.h"
 #include "Settings.h"
+#include "FileDropQueue.h"
 
 static void glfw_error_callback(int error, const char* description) {
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
+}
+
+static void glfw_file_drop_callback(GLFWwindow* window, int count, const char** paths) {
+    double cursorX = 0.0;
+    double cursorY = 0.0;
+    glfwGetCursorPos(window, &cursorX, &cursorY);
+    FileDropQueue::Push(cursorX, cursorY, count, paths);
 }
 
 int main() {
@@ -70,6 +78,7 @@ int main() {
     // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
+    glfwSetDropCallback(window, glfw_file_drop_callback);
 
     // Initialize Font Manager
     FontManager fontManager;

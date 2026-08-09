@@ -1,15 +1,163 @@
 #include "PasswordManager.h"
+#include "AtomicFile.h"
 #include "CryptoArchive.h"
+#include "EncryptedDatabase.h"
+#include "FormatValidation.h"
+#include "PathSecurity.h"
+#include "SecureMemory.h"
+#include "TransactionalFileBatch.h"
 #include <oqs/oqs.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/kdf.h>
+#include <openssl/crypto.h>
 #include <fstream>
 #include <iostream>
 #include <filesystem>
+#include <algorithm>
 #include <cstring>
+#include <limits>
+#include <memory>
+#include <array>
 
-PasswordManager::PasswordManager() {
+namespace {
+
+constexpr uint64_t MAX_COMPONENT_SIZE = 16ULL * 1024ULL * 1024ULL;
+constexpr uint64_t MAX_USER_FILE_SIZE = 64ULL * 1024ULL * 1024ULL;
+constexpr std::array<uint8_t, 8> USER_V5_MAGIC = {'P', 'Q', 'C', 'U', 'S', 'R', '0', '5'};
+constexpr uint32_t USER_V5_COMPONENT_COUNT = 9;
+constexpr size_t USER_V5_FIXED_HEADER_SIZE = 24;
+
+void Cleanse(std::vector<uint8_t>& data) {
+    if (!data.empty()) {
+        OPENSSL_cleanse(data.data(), data.size());
+    }
+}
+
+void AppendUint32(std::vector<uint8_t>& output, uint32_t value) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        output.push_back(static_cast<uint8_t>((value >> shift) & 0xffU));
+    }
+}
+
+void AppendUint64(std::vector<uint8_t>& output, uint64_t value) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        output.push_back(static_cast<uint8_t>((value >> shift) & 0xffU));
+    }
+}
+
+bool ReadUint32(const std::vector<uint8_t>& input, size_t& offset, uint32_t& value) {
+    if (offset > input.size() || input.size() - offset < sizeof(uint32_t)) {
+        return false;
+    }
+    value = 0;
+    for (size_t i = 0; i < sizeof(uint32_t); ++i) {
+        value = (value << 8U) | input[offset++];
+    }
+    return true;
+}
+
+bool ReadUint64(const std::vector<uint8_t>& input, size_t& offset, uint64_t& value) {
+    if (offset > input.size() || input.size() - offset < sizeof(uint64_t)) {
+        return false;
+    }
+    value = 0;
+    for (size_t i = 0; i < sizeof(uint64_t); ++i) {
+        value = (value << 8U) | input[offset++];
+    }
+    return true;
+}
+
+bool ReadPortableComponent(const std::vector<uint8_t>& input, size_t& offset,
+                           std::vector<uint8_t>& value) {
+    uint64_t size = 0;
+    if (!ReadUint64(input, offset, size) || size == 0 || size > MAX_COMPONENT_SIZE ||
+        size > input.size() - offset) {
+        return false;
+    }
+    value.assign(input.begin() + static_cast<std::ptrdiff_t>(offset),
+                 input.begin() + static_cast<std::ptrdiff_t>(offset + size));
+    offset += static_cast<size_t>(size);
+    return true;
+}
+
+bool DecodeV5(const std::vector<uint8_t>& input,
+              PasswordManager::EncryptedPassword& data) {
+    if (input.size() < USER_V5_FIXED_HEADER_SIZE ||
+        input.size() > MAX_USER_FILE_SIZE ||
+        !std::equal(USER_V5_MAGIC.begin(), USER_V5_MAGIC.end(), input.begin())) {
+        return false;
+    }
+
+    size_t offset = USER_V5_MAGIC.size();
+    uint32_t version = 0;
+    uint64_t totalSize = 0;
+    uint32_t componentCount = 0;
+    if (!ReadUint32(input, offset, version) ||
+        !ReadUint64(input, offset, totalSize) ||
+        !ReadUint32(input, offset, componentCount) ||
+        version != 5 || totalSize != input.size() ||
+        componentCount != USER_V5_COMPONENT_COUNT) {
+        return false;
+    }
+
+    PasswordManager::EncryptedPassword candidate;
+    candidate.version = version;
+    if (!ReadPortableComponent(input, offset, candidate.salt) ||
+        !ReadPortableComponent(input, offset, candidate.secret_key_nonce) ||
+        !ReadPortableComponent(input, offset, candidate.password_nonce) ||
+        !ReadPortableComponent(input, offset, candidate.ciphertext) ||
+        !ReadPortableComponent(input, offset, candidate.public_key) ||
+        !ReadPortableComponent(input, offset, candidate.encrypted_secret_key) ||
+        !ReadPortableComponent(input, offset, candidate.encrypted_password) ||
+        !ReadPortableComponent(input, offset, candidate.secret_key_auth_tag) ||
+        !ReadPortableComponent(input, offset, candidate.password_auth_tag) ||
+        offset != input.size()) {
+        return false;
+    }
+    data = std::move(candidate);
+    return true;
+}
+
+bool ReadVector(std::ifstream& file, std::vector<uint8_t>& value) {
+    uint64_t size = 0;
+    file.read(reinterpret_cast<char*>(&size), sizeof(size));
+    if (!file || size > MAX_COMPONENT_SIZE ||
+        size > static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max())) {
+        return false;
+    }
+
+    value.resize(static_cast<size_t>(size));
+    if (size > 0) {
+        file.read(reinterpret_cast<char*>(value.data()), static_cast<std::streamsize>(size));
+    }
+    return file.good();
+}
+
+bool ReadLegacyVector(std::ifstream& file, std::vector<uint8_t>& value) {
+    size_t size = 0;
+    file.read(reinterpret_cast<char*>(&size), sizeof(size));
+    if (!file || size > MAX_COMPONENT_SIZE ||
+        size > static_cast<size_t>(std::numeric_limits<std::streamsize>::max())) {
+        return false;
+    }
+
+    value.resize(size);
+    if (size > 0) {
+        file.read(reinterpret_cast<char*>(value.data()), static_cast<std::streamsize>(size));
+    }
+    return file.good();
+}
+
+} // namespace
+
+PasswordManager::PasswordManager()
+    : transaction_recovery_ready_(
+          TransactionalFileBatch::RecoverPendingTransactions()) {
+    if (!transaction_recovery_ready_) {
+        std::cerr << "Warning: an incomplete password transaction could not be recovered"
+                  << std::endl;
+    }
     EnsureUsersDirectory();
 }
 
@@ -17,12 +165,16 @@ PasswordManager::~PasswordManager() {
 }
 
 bool PasswordManager::UserExists(const std::string& username) const {
-    return std::filesystem::exists(GetUserFilePath(username));
+    const std::string path = GetUserFilePath(username);
+    return !path.empty() && std::filesystem::is_regular_file(path);
 }
 
 std::vector<uint8_t> PasswordManager::GenerateRandomBytes(size_t length) const {
+    if (length == 0 || length > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
     std::vector<uint8_t> bytes(length);
-    if (RAND_bytes(bytes.data(), length) != 1) {
+    if (RAND_bytes(bytes.data(), static_cast<int>(length)) != 1) {
         std::cerr << "Failed to generate random bytes" << std::endl;
         return {};
     }
@@ -33,20 +185,26 @@ std::vector<uint8_t> PasswordManager::DeriveKey(const std::string& password, con
     std::vector<uint8_t> key(32); // 256-bit key
     
     EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_SCRYPT, nullptr);
-    if (!ctx) return {};
+    if (!ctx) {
+        Cleanse(key);
+        return {};
+    }
     
     if (EVP_PKEY_derive_init(ctx) <= 0) {
         EVP_PKEY_CTX_free(ctx);
+        Cleanse(key);
         return {};
     }
     
     if (EVP_PKEY_CTX_set1_pbe_pass(ctx, password.c_str(), password.length()) <= 0) {
         EVP_PKEY_CTX_free(ctx);
+        Cleanse(key);
         return {};
     }
     
     if (EVP_PKEY_CTX_set1_scrypt_salt(ctx, salt.data(), salt.size()) <= 0) {
         EVP_PKEY_CTX_free(ctx);
+        Cleanse(key);
         return {};
     }
     
@@ -55,12 +213,14 @@ std::vector<uint8_t> PasswordManager::DeriveKey(const std::string& password, con
         EVP_PKEY_CTX_set_scrypt_r(ctx, 8) <= 0 ||
         EVP_PKEY_CTX_set_scrypt_p(ctx, 1) <= 0) {
         EVP_PKEY_CTX_free(ctx);
+        Cleanse(key);
         return {};
     }
     
     size_t keylen = key.size();
     if (EVP_PKEY_derive(ctx, key.data(), &keylen) <= 0) {
         EVP_PKEY_CTX_free(ctx);
+        Cleanse(key);
         return {};
     }
     
@@ -70,6 +230,12 @@ std::vector<uint8_t> PasswordManager::DeriveKey(const std::string& password, con
 
 std::vector<uint8_t> PasswordManager::AESEncrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key, 
                                                  const std::vector<uint8_t>& iv, std::vector<uint8_t>& tag) const {
+    if (data.empty() || key.size() != 32 ||
+        (iv.size() != NONCE_SIZE && iv.size() != 16) ||
+        data.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
+
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return {};
     
@@ -78,7 +244,8 @@ std::vector<uint8_t> PasswordManager::AESEncrypt(const std::vector<uint8_t>& dat
         return {};
     }
     
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv.size(), nullptr) != 1) {
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
+                            static_cast<int>(iv.size()), nullptr) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return {};
     }
@@ -92,7 +259,8 @@ std::vector<uint8_t> PasswordManager::AESEncrypt(const std::vector<uint8_t>& dat
     int len;
     int ciphertext_len;
     
-    if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len, data.data(), data.size()) != 1) {
+    if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len, data.data(),
+                          static_cast<int>(data.size())) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return {};
     }
@@ -117,6 +285,12 @@ std::vector<uint8_t> PasswordManager::AESEncrypt(const std::vector<uint8_t>& dat
 
 std::vector<uint8_t> PasswordManager::AESDecrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key,
                                                  const std::vector<uint8_t>& iv, const std::vector<uint8_t>& tag) const {
+    if (data.empty() || key.size() != 32 || tag.size() != TAG_SIZE ||
+        (iv.size() != NONCE_SIZE && iv.size() != 16) ||
+        data.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
+
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return {};
     
@@ -125,7 +299,8 @@ std::vector<uint8_t> PasswordManager::AESDecrypt(const std::vector<uint8_t>& dat
         return {};
     }
     
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv.size(), nullptr) != 1) {
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
+                            static_cast<int>(iv.size()), nullptr) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return {};
     }
@@ -139,19 +314,25 @@ std::vector<uint8_t> PasswordManager::AESDecrypt(const std::vector<uint8_t>& dat
     int len;
     int plaintext_len;
     
-    if (EVP_DecryptUpdate(ctx, plaintext.data(), &len, data.data(), data.size()) != 1) {
+    if (EVP_DecryptUpdate(ctx, plaintext.data(), &len, data.data(),
+                          static_cast<int>(data.size())) != 1) {
         EVP_CIPHER_CTX_free(ctx);
+        Cleanse(plaintext);
         return {};
     }
     plaintext_len = len;
     
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, tag.size(), const_cast<uint8_t*>(tag.data())) != 1) {
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG,
+                            static_cast<int>(tag.size()),
+                            const_cast<uint8_t*>(tag.data())) != 1) {
         EVP_CIPHER_CTX_free(ctx);
+        Cleanse(plaintext);
         return {};
     }
     
     if (EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
+        Cleanse(plaintext);
         return {}; // Authentication failed
     }
     plaintext_len += len;
@@ -161,106 +342,177 @@ std::vector<uint8_t> PasswordManager::AESDecrypt(const std::vector<uint8_t>& dat
     return plaintext;
 }
 
+bool PasswordManager::BuildEncryptedPassword(const std::string& password,
+                                             EncryptedPassword& data) const {
+    if (password.empty()) {
+        return false;
+    }
+
+    std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)> kem(
+        OQS_KEM_new(OQS_KEM_alg_ml_kem_768), OQS_KEM_free);
+    if (!kem) {
+        std::cerr << "Failed to initialize ML-KEM-768" << std::endl;
+        return false;
+    }
+
+    EncryptedPassword candidate;
+    candidate.version = CURRENT_VERSION;
+    candidate.salt = GenerateRandomBytes(SALT_SIZE);
+    candidate.secret_key_nonce = GenerateRandomBytes(NONCE_SIZE);
+    candidate.password_nonce = GenerateRandomBytes(NONCE_SIZE);
+    if (candidate.salt.size() != SALT_SIZE ||
+        candidate.secret_key_nonce.size() != NONCE_SIZE ||
+        candidate.password_nonce.size() != NONCE_SIZE ||
+        candidate.secret_key_nonce == candidate.password_nonce) {
+        std::cerr << "Failed to generate independent GCM nonces" << std::endl;
+        return false;
+    }
+
+    std::vector<uint8_t> derivedKey = DeriveKey(password, candidate.salt);
+    SecureMemory::ScopedCleanse derivedKeyGuard(derivedKey);
+    if (derivedKey.empty()) {
+        return false;
+    }
+
+    candidate.public_key.resize(kem->length_public_key);
+    std::vector<uint8_t> secretKey(kem->length_secret_key);
+    SecureMemory::ScopedCleanse secretKeyGuard(secretKey);
+    if (OQS_KEM_keypair(kem.get(), candidate.public_key.data(), secretKey.data()) != OQS_SUCCESS) {
+        Cleanse(derivedKey);
+        Cleanse(secretKey);
+        return false;
+    }
+
+    candidate.encrypted_secret_key =
+        AESEncrypt(secretKey, derivedKey, candidate.secret_key_nonce,
+                   candidate.secret_key_auth_tag);
+    Cleanse(secretKey);
+    if (candidate.encrypted_secret_key.empty()) {
+        Cleanse(derivedKey);
+        return false;
+    }
+
+    candidate.ciphertext.resize(kem->length_ciphertext);
+    std::vector<uint8_t> sharedSecret(kem->length_shared_secret);
+    SecureMemory::ScopedCleanse sharedSecretGuard(sharedSecret);
+    if (OQS_KEM_encaps(kem.get(), candidate.ciphertext.data(), sharedSecret.data(),
+                       candidate.public_key.data()) != OQS_SUCCESS) {
+        Cleanse(derivedKey);
+        Cleanse(sharedSecret);
+        return false;
+    }
+
+    std::vector<uint8_t> xorEncrypted = XOREncrypt(password, sharedSecret);
+    SecureMemory::ScopedCleanse xorEncryptedGuard(xorEncrypted);
+    candidate.encrypted_password =
+        AESEncrypt(xorEncrypted, derivedKey, candidate.password_nonce,
+                   candidate.password_auth_tag);
+    Cleanse(derivedKey);
+    Cleanse(sharedSecret);
+    Cleanse(xorEncrypted);
+    if (candidate.encrypted_password.empty()) {
+        return false;
+    }
+
+    data = std::move(candidate);
+    return true;
+}
+
+bool PasswordManager::ValidateEncryptedPassword(const EncryptedPassword& data,
+                                                const std::string& password) const {
+    if (password.empty() || data.version != CURRENT_VERSION ||
+        data.salt.size() != SALT_SIZE || data.secret_key_nonce.size() != NONCE_SIZE ||
+        data.password_nonce.size() != NONCE_SIZE ||
+        data.secret_key_nonce == data.password_nonce ||
+        data.secret_key_auth_tag.size() != TAG_SIZE ||
+        data.password_auth_tag.size() != TAG_SIZE) {
+        return false;
+    }
+
+    std::vector<uint8_t> derivedKey = DeriveKey(password, data.salt);
+    SecureMemory::ScopedCleanse derivedKeyGuard(derivedKey);
+    std::vector<uint8_t> secretKey = AESDecrypt(data.encrypted_secret_key, derivedKey,
+                                                data.secret_key_nonce,
+                                                data.secret_key_auth_tag);
+    SecureMemory::ScopedCleanse secretKeyGuard(secretKey);
+    if (derivedKey.empty() || secretKey.empty()) {
+        return false;
+    }
+
+    std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)> kem(
+        OQS_KEM_new(OQS_KEM_alg_ml_kem_768), OQS_KEM_free);
+    if (!kem || data.ciphertext.size() != kem->length_ciphertext ||
+        data.public_key.size() != kem->length_public_key ||
+        secretKey.size() != kem->length_secret_key) {
+        return false;
+    }
+
+    std::vector<uint8_t> sharedSecret(kem->length_shared_secret);
+    SecureMemory::ScopedCleanse sharedSecretGuard(sharedSecret);
+    if (OQS_KEM_decaps(kem.get(), sharedSecret.data(), data.ciphertext.data(),
+                       secretKey.data()) != OQS_SUCCESS) {
+        return false;
+    }
+
+    std::vector<uint8_t> protectedPassword =
+        AESDecrypt(data.encrypted_password, derivedKey, data.password_nonce,
+                   data.password_auth_tag);
+    SecureMemory::ScopedCleanse protectedPasswordGuard(protectedPassword);
+    if (protectedPassword.size() != password.size()) {
+        return false;
+    }
+
+    uint8_t difference = 0;
+    for (size_t i = 0; i < protectedPassword.size(); ++i) {
+        const uint8_t recovered =
+            protectedPassword[i] ^ sharedSecret[i % sharedSecret.size()];
+        difference |= recovered ^ static_cast<uint8_t>(password[i]);
+    }
+    return difference == 0;
+}
+
 bool PasswordManager::CreateUser(const std::string& username, const std::string& password) {
+    if (!transaction_recovery_ready_) {
+        std::cerr << "Cannot create a user while transaction recovery is incomplete" << std::endl;
+        return false;
+    }
+    std::string validationError;
+    if (!PathSecurity::ValidateUsername(username, &validationError)) {
+        std::cerr << "Invalid username: " << validationError << std::endl;
+        return false;
+    }
+    for (const auto& existingUsername : GetUsernames()) {
+        if (PathSecurity::NamesCollide(username, existingUsername)) {
+            std::cerr << "A user with an equivalent name already exists" << std::endl;
+            return false;
+        }
+    }
     if (UserExists(username)) {
         std::cerr << "User already exists: " << username << std::endl;
         return false;
     }
-    
-    std::cout << "Creating user with enhanced security: " << username << std::endl;
-    
-    // Initialize Kyber KEM
-    OQS_KEM* kem = OQS_KEM_new(OQS_KEM_alg_kyber_768);
-    if (!kem) {
-        std::cerr << "Failed to initialize Kyber KEM" << std::endl;
+
+    EncryptedPassword data;
+    if (!BuildEncryptedPassword(password, data) || !SaveEncryptedData(username, data)) {
+        std::cerr << "Failed to create encrypted user: " << username << std::endl;
         return false;
     }
-    
-    EncryptedPassword encData;
-    encData.version = CURRENT_VERSION;
-    
-    // Generate random salt and IV
-    encData.salt = GenerateRandomBytes(SALT_SIZE);
-    encData.iv = GenerateRandomBytes(IV_SIZE);
-    
-    if (encData.salt.empty() || encData.iv.empty()) {
-        std::cerr << "Failed to generate random bytes" << std::endl;
-        OQS_KEM_free(kem);
-        return false;
-    }
-    
-    // Derive key from password and salt
-    std::vector<uint8_t> derived_key = DeriveKey(password, encData.salt);
-    if (derived_key.empty()) {
-        std::cerr << "Failed to derive key" << std::endl;
-        OQS_KEM_free(kem);
-        return false;
-    }
-    
-    // Generate Kyber key pair
-    encData.public_key.resize(kem->length_public_key);
-    std::vector<uint8_t> secret_key(kem->length_secret_key);
-    
-    if (OQS_KEM_keypair(kem, encData.public_key.data(), secret_key.data()) != OQS_SUCCESS) {
-        std::cerr << "Failed to generate key pair" << std::endl;
-        OQS_KEM_free(kem);
-        return false;
-    }
-    
-    // Encrypt the secret key with AES-GCM
-    std::vector<uint8_t> secret_key_tag;
-    encData.encrypted_secret_key = AESEncrypt(secret_key, derived_key, encData.iv, secret_key_tag);
-    if (encData.encrypted_secret_key.empty()) {
-        std::cerr << "Failed to encrypt secret key" << std::endl;
-        OQS_KEM_free(kem);
-        return false;
-    }
-    
-    // Encapsulate to generate shared secret
-    encData.ciphertext.resize(kem->length_ciphertext);
-    std::vector<uint8_t> shared_secret(kem->length_shared_secret);
-    
-    if (OQS_KEM_encaps(kem, encData.ciphertext.data(), shared_secret.data(), encData.public_key.data()) != OQS_SUCCESS) {
-        std::cerr << "Failed to encapsulate" << std::endl;
-        OQS_KEM_free(kem);
-        return false;
-    }
-    
-    // Double encrypt the password: first with Kyber shared secret, then with AES
-    std::vector<uint8_t> xor_encrypted = XOREncrypt(password, shared_secret);
-    encData.encrypted_password = AESEncrypt(xor_encrypted, derived_key, encData.iv, encData.auth_tag);
-    
-    if (encData.encrypted_password.empty()) {
-        std::cerr << "Failed to encrypt password" << std::endl;
-        OQS_KEM_free(kem);
-        return false;
-    }
-    
-    // Combine all authentication tags
-    encData.auth_tag.insert(encData.auth_tag.end(), secret_key_tag.begin(), secret_key_tag.end());
-    
-    // Save to file with restrictive permissions
-    bool success = SaveEncryptedData(username, encData);
-    
-    // Set restrictive file permissions
-    if (success) {
-        std::string filepath = GetUserFilePath(username);
-        std::filesystem::permissions(filepath, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
-    }
-    
-    OQS_KEM_free(kem);
-    
-    if (success) {
-        std::cout << "User created successfully with enhanced security: " << username << std::endl;
-    } else {
-        std::cerr << "Failed to save user data: " << username << std::endl;
-    }
-    
-    return success;
+
+    std::filesystem::permissions(GetUserFilePath(username),
+        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace);
+    std::cout << "User created with ML-KEM-768 and independent AES-GCM nonces: "
+              << username << std::endl;
+    return true;
 }
 
 bool PasswordManager::VerifyPassword(const std::string& username, const std::string& password) const {
-    if (!UserExists(username)) {
+    if (!transaction_recovery_ready_) {
+        std::cerr << "Cannot authenticate while transaction recovery is incomplete" << std::endl;
+        return false;
+    }
+    if (password.empty() || !PathSecurity::ValidateUsername(username) ||
+        !UserExists(username)) {
         std::cerr << "User does not exist: " << username << std::endl;
         return false;
     }
@@ -271,67 +523,130 @@ bool PasswordManager::VerifyPassword(const std::string& username, const std::str
         return false;
     }
     
-    // Check if it's old format and needs migration
-    if (encData.version != CURRENT_VERSION) {
+    if (encData.version != CURRENT_VERSION &&
+        encData.version != ML_KEM_VERSION &&
+        encData.version != AES_GCM_VERSION &&
+        encData.version != PREVIOUS_VERSION) {
         std::cout << "Attempting to verify password with legacy format..." << std::endl;
-        return VerifyPasswordLegacy(username, password);
+        const bool legacyMatch = VerifyPasswordLegacy(username, password);
+        if (legacyMatch) {
+            EncryptedPassword migratedData;
+            if (BuildEncryptedPassword(password, migratedData) &&
+                SaveEncryptedData(username, migratedData)) {
+                std::cout << "Migrated v1 Kyber user file to portable v5 with ML-KEM-768"
+                          << std::endl;
+            } else {
+                std::cerr << "Warning: authentication succeeded but v1 migration failed"
+                          << std::endl;
+            }
+        }
+        return legacyMatch;
     }
-    
-    std::cout << "Verifying password with enhanced security..." << std::endl;
-    
-    // Derive key from password and salt
-    std::vector<uint8_t> derived_key = DeriveKey(password, encData.salt);
-    if (derived_key.empty()) {
+
+    if (encData.salt.size() != SALT_SIZE ||
+        encData.secret_key_nonce.empty() || encData.password_nonce.empty() ||
+        encData.secret_key_auth_tag.size() != TAG_SIZE ||
+        encData.password_auth_tag.size() != TAG_SIZE) {
+        std::cerr << "Invalid encrypted user parameters" << std::endl;
+        return false;
+    }
+
+    if ((encData.version == CURRENT_VERSION || encData.version == ML_KEM_VERSION ||
+         encData.version == AES_GCM_VERSION) &&
+        (encData.secret_key_nonce.size() != NONCE_SIZE ||
+         encData.password_nonce.size() != NONCE_SIZE ||
+         encData.secret_key_nonce == encData.password_nonce)) {
+        std::cerr << "Invalid or reused AES-GCM nonce in user file" << std::endl;
+        return false;
+    }
+
+    std::vector<uint8_t> derivedKey = DeriveKey(password, encData.salt);
+    SecureMemory::ScopedCleanse derivedKeyGuard(derivedKey);
+    if (derivedKey.empty()) {
         std::cerr << "Failed to derive key" << std::endl;
         return false;
     }
-    
-    // Split authentication tags
-    if (encData.auth_tag.size() != TAG_SIZE * 2) {
-        std::cerr << "Invalid authentication tag size" << std::endl;
-        return false;
-    }
-    
-    std::vector<uint8_t> password_tag(encData.auth_tag.begin(), encData.auth_tag.begin() + TAG_SIZE);
-    std::vector<uint8_t> secret_key_tag(encData.auth_tag.begin() + TAG_SIZE, encData.auth_tag.end());
-    
-    // Decrypt the secret key
-    std::vector<uint8_t> secret_key = AESDecrypt(encData.encrypted_secret_key, derived_key, encData.iv, secret_key_tag);
-    if (secret_key.empty()) {
+
+    std::vector<uint8_t> secretKey =
+        AESDecrypt(encData.encrypted_secret_key, derivedKey,
+                   encData.secret_key_nonce, encData.secret_key_auth_tag);
+    SecureMemory::ScopedCleanse secretKeyGuard(secretKey);
+    if (secretKey.empty()) {
+        Cleanse(derivedKey);
         std::cerr << "Failed to decrypt secret key - wrong password" << std::endl;
         return false;
     }
-    
-    // Initialize Kyber KEM
-    OQS_KEM* kem = OQS_KEM_new(OQS_KEM_alg_kyber_768);
+
+    const char* kemAlgorithm =
+        (encData.version == CURRENT_VERSION || encData.version == ML_KEM_VERSION)
+        ? OQS_KEM_alg_ml_kem_768
+        : OQS_KEM_alg_kyber_768;
+    std::unique_ptr<OQS_KEM, decltype(&OQS_KEM_free)> kem(
+        OQS_KEM_new(kemAlgorithm), OQS_KEM_free);
     if (!kem) {
-        std::cerr << "Failed to initialize Kyber KEM" << std::endl;
+        Cleanse(derivedKey);
+        Cleanse(secretKey);
+        std::cerr << "Failed to initialize KEM: " << kemAlgorithm << std::endl;
         return false;
     }
-    
-    // Decapsulate to get shared secret
-    std::vector<uint8_t> shared_secret(kem->length_shared_secret);
-    if (OQS_KEM_decaps(kem, shared_secret.data(), encData.ciphertext.data(), secret_key.data()) != OQS_SUCCESS) {
+
+    if (encData.ciphertext.size() != kem->length_ciphertext ||
+        encData.public_key.size() != kem->length_public_key ||
+        secretKey.size() != kem->length_secret_key) {
+        Cleanse(derivedKey);
+        Cleanse(secretKey);
+        std::cerr << "Encrypted user KEM component sizes are invalid" << std::endl;
+        return false;
+    }
+
+    std::vector<uint8_t> sharedSecret(kem->length_shared_secret);
+    SecureMemory::ScopedCleanse sharedSecretGuard(sharedSecret);
+    if (OQS_KEM_decaps(kem.get(), sharedSecret.data(), encData.ciphertext.data(),
+                       secretKey.data()) != OQS_SUCCESS) {
+        Cleanse(derivedKey);
+        Cleanse(secretKey);
+        Cleanse(sharedSecret);
         std::cerr << "Failed to decapsulate" << std::endl;
-        OQS_KEM_free(kem);
         return false;
     }
-    
-    // Decrypt the password
-    std::vector<uint8_t> aes_decrypted = AESDecrypt(encData.encrypted_password, derived_key, encData.iv, password_tag);
-    if (aes_decrypted.empty()) {
+
+    std::vector<uint8_t> aesDecrypted =
+        AESDecrypt(encData.encrypted_password, derivedKey,
+                   encData.password_nonce, encData.password_auth_tag);
+    SecureMemory::ScopedCleanse aesDecryptedGuard(aesDecrypted);
+    Cleanse(derivedKey);
+    Cleanse(secretKey);
+    if (aesDecrypted.empty()) {
+        Cleanse(sharedSecret);
         std::cerr << "Failed to decrypt password with AES - authentication failed" << std::endl;
-        OQS_KEM_free(kem);
         return false;
     }
-    
-    std::string decrypted_password = XORDecrypt(aes_decrypted, shared_secret);
-    
-    OQS_KEM_free(kem);
-    
-    bool match = (decrypted_password == password);
+
+    bool match = aesDecrypted.size() == password.size();
+    uint8_t difference = 0;
     if (match) {
-        std::cout << "Password verified successfully with enhanced security for user: " << username << std::endl;
+        for (size_t i = 0; i < aesDecrypted.size(); ++i) {
+            const uint8_t recovered = aesDecrypted[i] ^ sharedSecret[i % sharedSecret.size()];
+            difference |= recovered ^ static_cast<uint8_t>(password[i]);
+        }
+        match = difference == 0;
+    }
+    Cleanse(aesDecrypted);
+    Cleanse(sharedSecret);
+
+    if (match) {
+        std::cout << "Password verified successfully for user: " << username << std::endl;
+        if (encData.version != CURRENT_VERSION) {
+            EncryptedPassword migratedData;
+            if (BuildEncryptedPassword(password, migratedData) &&
+                SaveEncryptedData(username, migratedData)) {
+                std::cout << "Migrated user file to portable v5 with ML-KEM-768"
+                          << std::endl;
+            } else {
+                std::cerr << "Warning: authentication succeeded but ML-KEM migration failed"
+                          << std::endl;
+            }
+        }
     } else {
         std::cerr << "Password verification failed for user: " << username << std::endl;
     }
@@ -344,6 +659,9 @@ bool PasswordManager::VerifyPasswordLegacy(const std::string& username, const st
     std::cout << "Using legacy verification for old format file..." << std::endl;
     
     // Load old format data
+    if (!PathSecurity::ValidateUsername(username)) {
+        return false;
+    }
     std::string filepath = GetUserFilePath(username);
     std::ifstream file(filepath, std::ios::binary);
     if (!file) return false;
@@ -355,55 +673,53 @@ bool PasswordManager::VerifyPasswordLegacy(const std::string& username, const st
         std::vector<uint8_t> secret_key;
         std::vector<uint8_t> encrypted_password;
     } oldData;
+    SecureMemory::ScopedCleanse oldSecretKeyGuard(oldData.secret_key);
     
-    // Load old format data
-    size_t size;
-    
-    // Load ciphertext
-    file.read(reinterpret_cast<char*>(&size), sizeof(size));
-    if (file.gcount() != sizeof(size)) return false;
-    oldData.ciphertext.resize(size);
-    file.read(reinterpret_cast<char*>(oldData.ciphertext.data()), size);
-    if (file.gcount() != static_cast<std::streamsize>(size)) return false;
-    
-    // Load public key
-    file.read(reinterpret_cast<char*>(&size), sizeof(size));
-    if (file.gcount() != sizeof(size)) return false;
-    oldData.public_key.resize(size);
-    file.read(reinterpret_cast<char*>(oldData.public_key.data()), size);
-    if (file.gcount() != static_cast<std::streamsize>(size)) return false;
-    
-    // Load secret key
-    file.read(reinterpret_cast<char*>(&size), sizeof(size));
-    if (file.gcount() != sizeof(size)) return false;
-    oldData.secret_key.resize(size);
-    file.read(reinterpret_cast<char*>(oldData.secret_key.data()), size);
-    if (file.gcount() != static_cast<std::streamsize>(size)) return false;
-    
-    // Load encrypted password
-    file.read(reinterpret_cast<char*>(&size), sizeof(size));
-    if (file.gcount() != sizeof(size)) return false;
-    oldData.encrypted_password.resize(size);
-    file.read(reinterpret_cast<char*>(oldData.encrypted_password.data()), size);
-    if (file.gcount() != static_cast<std::streamsize>(size)) return false;
+    if (!ReadLegacyVector(file, oldData.ciphertext) ||
+        !ReadLegacyVector(file, oldData.public_key) ||
+        !ReadLegacyVector(file, oldData.secret_key) ||
+        !ReadLegacyVector(file, oldData.encrypted_password) ||
+        file.peek() != std::char_traits<char>::eof()) {
+        return false;
+    }
     
     // Initialize Kyber KEM
     OQS_KEM* kem = OQS_KEM_new(OQS_KEM_alg_kyber_768);
     if (!kem) return false;
-    
-    // Decapsulate to get shared secret
-    std::vector<uint8_t> shared_secret(kem->length_shared_secret);
-    if (OQS_KEM_decaps(kem, shared_secret.data(), oldData.ciphertext.data(), oldData.secret_key.data()) != OQS_SUCCESS) {
+
+    if (oldData.ciphertext.size() != kem->length_ciphertext ||
+        oldData.public_key.size() != kem->length_public_key ||
+        oldData.secret_key.size() != kem->length_secret_key ||
+        oldData.encrypted_password.empty()) {
+        Cleanse(oldData.secret_key);
         OQS_KEM_free(kem);
         return false;
     }
     
-    // Decrypt password
-    std::string decrypted_password = XORDecrypt(oldData.encrypted_password, shared_secret);
+    // Decapsulate to get shared secret
+    std::vector<uint8_t> shared_secret(kem->length_shared_secret);
+    SecureMemory::ScopedCleanse sharedSecretGuard(shared_secret);
+    if (OQS_KEM_decaps(kem, shared_secret.data(), oldData.ciphertext.data(), oldData.secret_key.data()) != OQS_SUCCESS) {
+        Cleanse(oldData.secret_key);
+        Cleanse(shared_secret);
+        OQS_KEM_free(kem);
+        return false;
+    }
     
+    bool match = oldData.encrypted_password.size() == password.size();
+    uint8_t difference = 0;
+    if (match) {
+        for (size_t i = 0; i < oldData.encrypted_password.size(); ++i) {
+            const uint8_t recovered =
+                oldData.encrypted_password[i] ^ shared_secret[i % shared_secret.size()];
+            difference |= recovered ^ static_cast<uint8_t>(password[i]);
+        }
+        match = difference == 0;
+    }
+
+    Cleanse(oldData.secret_key);
+    Cleanse(shared_secret);
     OQS_KEM_free(kem);
-    
-    bool match = (decrypted_password == password);
     if (match) {
         std::cout << "Legacy password verified. Consider migrating to new format." << std::endl;
     }
@@ -417,7 +733,9 @@ bool PasswordManager::HasAnyUsers() const {
     }
     
     for (const auto& entry : std::filesystem::directory_iterator("users")) {
-        if (entry.is_regular_file() && entry.path().extension() == ".enc") {
+        if (entry.is_regular_file() && !entry.is_symlink() &&
+            entry.path().extension() == ".enc" &&
+            PathSecurity::ValidateUsername(entry.path().stem().string())) {
             return true;
         }
     }
@@ -432,9 +750,19 @@ std::vector<std::string> PasswordManager::GetUsernames() const {
     }
     
     for (const auto& entry : std::filesystem::directory_iterator("users")) {
-        if (entry.is_regular_file() && entry.path().extension() == ".enc") {
+        if (entry.is_regular_file() && !entry.is_symlink() &&
+            entry.path().extension() == ".enc") {
             std::string filename = entry.path().stem().string();
-            usernames.push_back(filename);
+            if (!PathSecurity::ValidateUsername(filename)) {
+                continue;
+            }
+            const bool collision = std::any_of(
+                usernames.begin(), usernames.end(), [&](const std::string& existing) {
+                    return PathSecurity::NamesCollide(existing, filename);
+                });
+            if (!collision) {
+                usernames.push_back(filename);
+            }
         }
     }
     
@@ -449,146 +777,165 @@ std::vector<uint8_t> PasswordManager::XOREncrypt(const std::string& data, const 
     return result;
 }
 
-std::string PasswordManager::XORDecrypt(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key) const {
-    std::string result(data.size(), 0);
-    for (size_t i = 0; i < data.size(); ++i) {
-        result[i] = static_cast<char>(data[i] ^ key[i % key.size()]);
-    }
-    return result;
-}
-
 bool PasswordManager::SaveEncryptedData(const std::string& username, const EncryptedPassword& data) const {
-    std::string filepath = GetUserFilePath(username);
-    std::ofstream file(filepath, std::ios::binary);
-    if (!file) {
-        std::cerr << "Failed to open file for writing: " << filepath << std::endl;
+    std::vector<uint8_t> encoded;
+    if (!EncodeEncryptedData(data, encoded)) {
         return false;
     }
-    
-    // Save version first
-    file.write(reinterpret_cast<const char*>(&data.version), sizeof(data.version));
-    
-    // Save sizes and data for new format
-    size_t size = data.salt.size();
-    file.write(reinterpret_cast<const char*>(&size), sizeof(size));
-    file.write(reinterpret_cast<const char*>(data.salt.data()), size);
-    
-    size = data.iv.size();
-    file.write(reinterpret_cast<const char*>(&size), sizeof(size));
-    file.write(reinterpret_cast<const char*>(data.iv.data()), size);
-    
-    size = data.ciphertext.size();
-    file.write(reinterpret_cast<const char*>(&size), sizeof(size));
-    file.write(reinterpret_cast<const char*>(data.ciphertext.data()), size);
-    
-    size = data.public_key.size();
-    file.write(reinterpret_cast<const char*>(&size), sizeof(size));
-    file.write(reinterpret_cast<const char*>(data.public_key.data()), size);
-    
-    size = data.encrypted_secret_key.size();
-    file.write(reinterpret_cast<const char*>(&size), sizeof(size));
-    file.write(reinterpret_cast<const char*>(data.encrypted_secret_key.data()), size);
-    
-    size = data.encrypted_password.size();
-    file.write(reinterpret_cast<const char*>(&size), sizeof(size));
-    file.write(reinterpret_cast<const char*>(data.encrypted_password.data()), size);
-    
-    size = data.auth_tag.size();
-    file.write(reinterpret_cast<const char*>(&size), sizeof(size));
-    file.write(reinterpret_cast<const char*>(data.auth_tag.data()), size);
-    
-    file.close();
-    return file.good();
+
+    const std::string filepath = GetUserFilePath(username);
+    if (filepath.empty()) {
+        return false;
+    }
+    if (!AtomicFile::Write(filepath, encoded)) {
+        std::cerr << "Failed to atomically save encrypted user data: " << filepath << std::endl;
+        return false;
+    }
+    return true;
+}
+
+bool PasswordManager::EncodeEncryptedData(const EncryptedPassword& data,
+                                          std::vector<uint8_t>& encoded) const {
+    if (data.version != CURRENT_VERSION || data.salt.size() != SALT_SIZE ||
+        data.secret_key_nonce.size() != NONCE_SIZE ||
+        data.password_nonce.size() != NONCE_SIZE ||
+        data.secret_key_nonce == data.password_nonce ||
+        data.secret_key_auth_tag.size() != TAG_SIZE ||
+        data.password_auth_tag.size() != TAG_SIZE) {
+        std::cerr << "Refusing to save invalid v5 encrypted user data" << std::endl;
+        return false;
+    }
+
+    const std::array<const std::vector<uint8_t>*, USER_V5_COMPONENT_COUNT> components = {
+        &data.salt,
+        &data.secret_key_nonce,
+        &data.password_nonce,
+        &data.ciphertext,
+        &data.public_key,
+        &data.encrypted_secret_key,
+        &data.encrypted_password,
+        &data.secret_key_auth_tag,
+        &data.password_auth_tag
+    };
+    uint64_t totalSize = USER_V5_FIXED_HEADER_SIZE;
+    for (const auto* component : components) {
+        if (component == nullptr || component->empty() ||
+            component->size() > MAX_COMPONENT_SIZE ||
+            totalSize > MAX_USER_FILE_SIZE - sizeof(uint64_t) - component->size()) {
+            return false;
+        }
+        totalSize += sizeof(uint64_t) + component->size();
+    }
+
+    encoded.clear();
+    encoded.reserve(static_cast<size_t>(totalSize));
+    encoded.insert(encoded.end(), USER_V5_MAGIC.begin(), USER_V5_MAGIC.end());
+    AppendUint32(encoded, CURRENT_VERSION);
+    AppendUint64(encoded, totalSize);
+    AppendUint32(encoded, USER_V5_COMPONENT_COUNT);
+    for (const auto* component : components) {
+        AppendUint64(encoded, component->size());
+        encoded.insert(encoded.end(), component->begin(), component->end());
+    }
+    return encoded.size() == totalSize;
 }
 
 PasswordManager::EncryptedPassword PasswordManager::LoadEncryptedData(const std::string& username) const {
-    EncryptedPassword data;
+    EncryptedPassword data{};
     std::string filepath = GetUserFilePath(username);
+    if (filepath.empty()) {
+        return data;
+    }
     std::ifstream file(filepath, std::ios::binary);
     if (!file) {
         std::cerr << "Failed to open file for reading: " << filepath << std::endl;
         return data;
     }
     
-    // Check if it's new format by trying to read version
-    uint32_t version;
-    file.read(reinterpret_cast<char*>(&version), sizeof(version));
-    
-    if (file.gcount() == sizeof(version) && version == CURRENT_VERSION) {
-        // New format
-        data.version = version;
-        
-        size_t size;
-        
-        // Load salt
-        file.read(reinterpret_cast<char*>(&size), sizeof(size));
-        if (file.gcount() != sizeof(size)) return {};
-        data.salt.resize(size);
-        file.read(reinterpret_cast<char*>(data.salt.data()), size);
-        if (file.gcount() != static_cast<std::streamsize>(size)) return {};
-        
-        // Load IV
-        file.read(reinterpret_cast<char*>(&size), sizeof(size));
-        if (file.gcount() != sizeof(size)) return {};
-        data.iv.resize(size);
-        file.read(reinterpret_cast<char*>(data.iv.data()), size);
-        if (file.gcount() != static_cast<std::streamsize>(size)) return {};
-        
-        // Load ciphertext
-        file.read(reinterpret_cast<char*>(&size), sizeof(size));
-        if (file.gcount() != sizeof(size)) return {};
-        data.ciphertext.resize(size);
-        file.read(reinterpret_cast<char*>(data.ciphertext.data()), size);
-        if (file.gcount() != static_cast<std::streamsize>(size)) return {};
-        
-        // Load public key
-        file.read(reinterpret_cast<char*>(&size), sizeof(size));
-        if (file.gcount() != sizeof(size)) return {};
-        data.public_key.resize(size);
-        file.read(reinterpret_cast<char*>(data.public_key.data()), size);
-        if (file.gcount() != static_cast<std::streamsize>(size)) return {};
-        
-        // Load encrypted secret key
-        file.read(reinterpret_cast<char*>(&size), sizeof(size));
-        if (file.gcount() != sizeof(size)) return {};
-        data.encrypted_secret_key.resize(size);
-        file.read(reinterpret_cast<char*>(data.encrypted_secret_key.data()), size);
-        if (file.gcount() != static_cast<std::streamsize>(size)) return {};
-        
-        // Load encrypted password
-        file.read(reinterpret_cast<char*>(&size), sizeof(size));
-        if (file.gcount() != sizeof(size)) return {};
-        data.encrypted_password.resize(size);
-        file.read(reinterpret_cast<char*>(data.encrypted_password.data()), size);
-        if (file.gcount() != static_cast<std::streamsize>(size)) return {};
-        
-        // Load auth tag
-        file.read(reinterpret_cast<char*>(&size), sizeof(size));
-        if (file.gcount() != sizeof(size)) return {};
-        data.auth_tag.resize(size);
-        file.read(reinterpret_cast<char*>(data.auth_tag.data()), size);
-        if (file.gcount() != static_cast<std::streamsize>(size)) return {};
-        
-    } else {
-        // Old format - set version to 1 to indicate legacy format
-        data.version = 1;
-        
-        // Reset file position and treat the first 4 bytes as size
-        file.seekg(0, std::ios::beg);
-        
-        size_t size;
-        file.read(reinterpret_cast<char*>(&size), sizeof(size));
-        if (file.gcount() != sizeof(size)) return {};
-        data.ciphertext.resize(size);
-        file.read(reinterpret_cast<char*>(data.ciphertext.data()), size);
-        if (file.gcount() != static_cast<std::streamsize>(size)) return {};
+    file.seekg(0, std::ios::end);
+    const std::streamoff endPosition = file.tellg();
+    if (endPosition <= 0 || static_cast<uint64_t>(endPosition) > MAX_USER_FILE_SIZE) {
+        return {};
     }
-    
+    const size_t fileSize = static_cast<size_t>(endPosition);
+    file.seekg(0, std::ios::beg);
+
+    std::vector<uint8_t> encoded(fileSize);
+    file.read(reinterpret_cast<char*>(encoded.data()),
+              static_cast<std::streamsize>(encoded.size()));
+    if (!file || file.gcount() != static_cast<std::streamsize>(encoded.size())) {
+        return {};
+    }
+
+    FormatValidation::UserFormat format = FormatValidation::UserFormat::Invalid;
+    if (!FormatValidation::ValidateUserFile(encoded.data(), encoded.size(), &format)) {
+        return {};
+    }
+    if (format == FormatValidation::UserFormat::V5) {
+        return DecodeV5(encoded, data) ? data : EncryptedPassword{};
+    }
+
+    file.clear();
+    file.seekg(0, std::ios::beg);
+
+    uint32_t version = 0;
+    file.read(reinterpret_cast<char*>(&version), sizeof(version));
+
+    if (!file) {
+        return {};
+    }
+
+    if (version == ML_KEM_VERSION || version == AES_GCM_VERSION) {
+        data.version = version;
+        if (!ReadVector(file, data.salt) ||
+            !ReadVector(file, data.secret_key_nonce) ||
+            !ReadVector(file, data.password_nonce) ||
+            !ReadVector(file, data.ciphertext) ||
+            !ReadVector(file, data.public_key) ||
+            !ReadVector(file, data.encrypted_secret_key) ||
+            !ReadVector(file, data.encrypted_password) ||
+            !ReadVector(file, data.secret_key_auth_tag) ||
+            !ReadVector(file, data.password_auth_tag) ||
+            file.peek() != std::char_traits<char>::eof()) {
+            return {};
+        }
+    } else if (version == PREVIOUS_VERSION) {
+        data.version = version;
+        std::vector<uint8_t> legacyIv;
+        std::vector<uint8_t> combinedTags;
+        if (!ReadLegacyVector(file, data.salt) ||
+            !ReadLegacyVector(file, legacyIv) ||
+            !ReadLegacyVector(file, data.ciphertext) ||
+            !ReadLegacyVector(file, data.public_key) ||
+            !ReadLegacyVector(file, data.encrypted_secret_key) ||
+            !ReadLegacyVector(file, data.encrypted_password) ||
+            !ReadLegacyVector(file, combinedTags) ||
+            file.peek() != std::char_traits<char>::eof() ||
+            data.salt.size() != SALT_SIZE || legacyIv.size() != 16 ||
+            combinedTags.size() != TAG_SIZE * 2) {
+            return {};
+        }
+
+        data.secret_key_nonce = legacyIv;
+        data.password_nonce = legacyIv;
+        data.password_auth_tag.assign(combinedTags.begin(),
+                                      combinedTags.begin() + TAG_SIZE);
+        data.secret_key_auth_tag.assign(combinedTags.begin() + TAG_SIZE,
+                                        combinedTags.end());
+    } else {
+        data.version = 1;
+        file.seekg(0, std::ios::beg);
+        if (!ReadLegacyVector(file, data.ciphertext)) {
+            return {};
+        }
+    }
+
     return data;
 }
 
 std::string PasswordManager::GetUserFilePath(const std::string& username) const {
-    return "users/" + username + ".enc";
+    std::filesystem::path path;
+    return PathSecurity::UserFilePath(username, path) ? path.string() : std::string{};
 }
 
 void PasswordManager::EnsureUsersDirectory() const {
@@ -600,145 +947,94 @@ void PasswordManager::EnsureUsersDirectory() const {
 }
 
 bool PasswordManager::ChangeMasterPassword(const std::string& username, const std::string& oldPassword, const std::string& newPassword) {
+    std::filesystem::path databasePath;
+    if (!PathSecurity::UserDatabasePath(username, databasePath)) {
+        return false;
+    }
+    const std::string defaultDatabasePath = databasePath.string();
+    if (std::filesystem::exists(defaultDatabasePath)) {
+        EncryptedDatabase database(defaultDatabasePath, oldPassword);
+        if (!database.initialize()) {
+            std::cerr << "Cannot include the user's database in password transaction"
+                      << std::endl;
+            return false;
+        }
+        return ChangeMasterPassword(username, oldPassword, newPassword, &database);
+    }
+    return ChangeMasterPassword(username, oldPassword, newPassword, nullptr);
+}
+
+bool PasswordManager::ChangeMasterPassword(const std::string& username,
+                                           const std::string& oldPassword,
+                                           const std::string& newPassword,
+                                           EncryptedDatabase* database) {
     std::cout << "\n---------- CHANGE MASTER PASSWORD ----------" << std::endl;
     std::cout << "Changing password for user: " << username << std::endl;
-    
-    // First, verify the old password
-    if (!VerifyPassword(username, oldPassword)) {
+
+    if (!PathSecurity::ValidateUsername(username) || newPassword.empty() ||
+        !TransactionalFileBatch::RecoverPendingTransactions() ||
+        !VerifyPassword(username, oldPassword)) {
         std::cout << "Old password verification failed!" << std::endl;
         std::cout << "----------------------------------------\n" << std::endl;
         return false;
     }
-    
-    // Create new user entry with the new password
-    // We need to save the new password data to the user file
-    std::vector<uint8_t> salt = GenerateRandomBytes(SALT_SIZE);
-    std::vector<uint8_t> iv = GenerateRandomBytes(IV_SIZE);
-    
-    // Derive key from new password
-    std::vector<uint8_t> key = DeriveKey(newPassword, salt);
-    if (key.empty()) {
-        std::cout << "Failed to derive key from new password!" << std::endl;
-        std::cout << "----------------------------------------\n" << std::endl;
-        return false;
-    }
-    
-    // Generate Kyber key pair
-    OQS_KEM* kem = OQS_KEM_new(OQS_KEM_alg_kyber_768);
-    if (!kem) {
-        std::cout << "Failed to initialize Kyber KEM!" << std::endl;
-        std::cout << "----------------------------------------\n" << std::endl;
-        return false;
-    }
-    
-    std::vector<uint8_t> public_key(kem->length_public_key);
-    std::vector<uint8_t> secret_key(kem->length_secret_key);
-    
-    if (OQS_KEM_keypair(kem, public_key.data(), secret_key.data()) != OQS_SUCCESS) {
-        std::cout << "Failed to generate Kyber key pair!" << std::endl;
-        OQS_KEM_free(kem);
-        std::cout << "----------------------------------------\n" << std::endl;
-        return false;
-    }
-    
-    // Encrypt the secret key with AES - use separate auth tag
-    std::vector<uint8_t> secretKeyAuthTag;
-    std::vector<uint8_t> encrypted_secret_key = AESEncrypt(secret_key, key, iv, secretKeyAuthTag);
-    if (encrypted_secret_key.empty()) {
-        std::cout << "Failed to encrypt secret key!" << std::endl;
-        OQS_KEM_free(kem);
-        std::cout << "----------------------------------------\n" << std::endl;
-        return false;
-    }
-    
-    // Generate shared secret and ciphertext
-    std::vector<uint8_t> ciphertext(kem->length_ciphertext);
-    std::vector<uint8_t> shared_secret(kem->length_shared_secret);
-    
-    if (OQS_KEM_encaps(kem, ciphertext.data(), shared_secret.data(), public_key.data()) != OQS_SUCCESS) {
-        std::cout << "Failed to perform Kyber encapsulation!" << std::endl;
-        OQS_KEM_free(kem);
-        std::cout << "----------------------------------------\n" << std::endl;
-        return false;
-    }
-    
-    // Double encrypt the password - use separate auth tags for each encryption
-    std::vector<uint8_t> password_data(newPassword.begin(), newPassword.end());
-    
-    // First encrypt with shared secret (XOR)
-    std::vector<uint8_t> xor_encrypted = XOREncrypt(newPassword, shared_secret);
-    
-    // Then encrypt with AES-GCM
-    std::vector<uint8_t> passwordAuthTag;
-    std::vector<uint8_t> double_encrypted = AESEncrypt(xor_encrypted, key, iv, passwordAuthTag);
-    if (double_encrypted.empty()) {
-        std::cout << "Failed to perform password encryption!" << std::endl;
-        OQS_KEM_free(kem);
-        std::cout << "----------------------------------------\n" << std::endl;
-        return false;
-    }
-    
-    // Create the encrypted password structure - combine auth tags correctly
+
+    std::vector<TransactionalFileBatch::Entry> replacements;
+
+    // Prepare and cryptographically validate the user file without publishing it.
     EncryptedPassword newPasswordData;
-    newPasswordData.salt = salt;
-    newPasswordData.iv = iv;
-    newPasswordData.ciphertext = ciphertext;
-    newPasswordData.public_key = public_key;
-    newPasswordData.encrypted_secret_key = encrypted_secret_key;
-    newPasswordData.encrypted_password = double_encrypted;
-    // Combine auth tags: password tag first, then secret key tag
-    newPasswordData.auth_tag = passwordAuthTag;
-    newPasswordData.auth_tag.insert(newPasswordData.auth_tag.end(), secretKeyAuthTag.begin(), secretKeyAuthTag.end());
-    newPasswordData.version = CURRENT_VERSION;
-    
-    // Save the new password data
-    if (!SaveEncryptedData(username, newPasswordData)) {
-        std::cout << "Failed to save new password data!" << std::endl;
-        OQS_KEM_free(kem);
-        std::cout << "----------------------------------------\n" << std::endl;
+    std::vector<uint8_t> encodedUser;
+    if (!BuildEncryptedPassword(newPassword, newPasswordData) ||
+        !ValidateEncryptedPassword(newPasswordData, newPassword) ||
+        !EncodeEncryptedData(newPasswordData, encodedUser)) {
+        std::cout << "Failed to prepare new encrypted user data!" << std::endl;
         return false;
     }
-    
-    OQS_KEM_free(kem);
-    
-    // Now find and update all user's archives
-    std::cout << "Finding user archives..." << std::endl;
-    
-    std::vector<std::string> userArchives = CryptoArchive::FindUserArchives(username);
-    std::cout << "Found " << userArchives.size() << " archives for user" << std::endl;
-    
-    bool allArchivesUpdated = true;
+    replacements.push_back({GetUserFilePath(username), std::move(encodedUser)});
+
+    // Prepare and round-trip authenticate the database replacement.
+    if (database != nullptr) {
+        std::vector<uint8_t> encodedDatabase;
+        if (!database->prepareMasterPasswordChange(oldPassword, newPassword,
+                                                   encodedDatabase)) {
+            std::cout << "Failed to prepare encrypted database replacement" << std::endl;
+            return false;
+        }
+        replacements.push_back({database->getDatabasePath(), std::move(encodedDatabase)});
+    }
+
+    // Every archive is fully loaded with the old password, then re-encrypted in
+    // memory under the new password. No archive file changes during this phase.
+    const std::vector<std::string> userArchives = CryptoArchive::FindUserArchives(username);
     for (const std::string& archiveName : userArchives) {
-        std::cout << "Updating archive: " << archiveName << std::endl;
-        
-        // Create a CryptoArchive instance for this archive
         CryptoArchive archive(username, archiveName);
-        
-        // Load the archive with the old password
         if (!archive.LoadArchive(oldPassword)) {
-            std::cout << "Failed to load archive " << archiveName << " with old password!" << std::endl;
-            allArchivesUpdated = false;
-            continue;
+            std::cout << "Failed to authenticate archive " << archiveName << std::endl;
+            return false;
         }
-        
-        // Change the password for this archive
-        if (!archive.ChangePassword(oldPassword, newPassword)) {
-            std::cout << "Failed to change password for archive " << archiveName << std::endl;
-            allArchivesUpdated = false;
-            continue;
+
+        std::vector<uint8_t> encodedArchive;
+        if (!archive.PreparePasswordChange(oldPassword, newPassword, encodedArchive)) {
+            std::cout << "Failed to prepare archive " << archiveName << std::endl;
+            return false;
         }
-        
-        std::cout << "Successfully updated archive: " << archiveName << std::endl;
+        replacements.push_back({archive.GetArchiveFilePath(), std::move(encodedArchive)});
     }
-    
-    if (allArchivesUpdated) {
-        std::cout << "Successfully changed master password and updated all archives!" << std::endl;
-        std::cout << "----------------------------------------\n" << std::endl;
-        return true;
-    } else {
-        std::cout << "Master password changed but some archives could not be updated!" << std::endl;
-        std::cout << "You may need to manually update remaining archives." << std::endl;
-        std::cout << "----------------------------------------\n" << std::endl;
-        return false; // Return false if not all archives were updated
+
+    if (!TransactionalFileBatch::Commit(replacements)) {
+        std::cout << "Password transaction failed; original files remain active" << std::endl;
+        return false;
     }
+
+    if (database != nullptr && !database->completeMasterPasswordChange(newPassword)) {
+        // Disk commit is already durable. Report the state accurately; the UI
+        // will recreate this database owner using the newly accepted password.
+        std::cerr << "Password transaction committed, but database memory refresh failed"
+                  << std::endl;
+    }
+
+    std::cout << "Master password transaction committed for user, database and "
+              << userArchives.size() << " archive(s)" << std::endl;
+    std::cout << "----------------------------------------\n" << std::endl;
+    return true;
 }

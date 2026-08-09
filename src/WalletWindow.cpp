@@ -1,6 +1,7 @@
 #include "WalletWindow.h"
 #include "Settings.h"
 #include "PasswordManager.h"
+#include "PathSecurity.h"
 #include "imgui.h"
 #include <cstring>
 #include <iostream>
@@ -9,13 +10,15 @@
 #include <algorithm> // for std::find
 
 WalletWindow::WalletWindow() : shouldClose(false), showSettings(false), showArchive(false), 
-                               showCreateArchiveDialog(false), showFontSettings(false),
+                               showCreateArchiveDialog(false), showRenameArchiveDialog(false),
+                               showFontSettings(false),
                                showChangePasswordDialog(false), showDatabaseManager(false),
-                               selectedArchiveIndex(-1), m_fontManager(nullptr), 
-                               selectedFontIndex(0), fontSizeSlider(16.0f), 
-                               showOldPassword(false), showNewPassword(false) {
+                               showOldPassword(false), showNewPassword(false),
+                               m_fontManager(nullptr), selectedFontIndex(0),
+                               fontSizeSlider(16.0f), selectedArchiveIndex(-1) {
     // Simplified constructor - transaction and balance related variables have been removed
     memset(newArchiveNameBuffer, 0, sizeof(newArchiveNameBuffer));
+    memset(renameArchiveNameBuffer, 0, sizeof(renameArchiveNameBuffer));
     memset(oldPasswordBuffer, 0, sizeof(oldPasswordBuffer));
     memset(newPasswordBuffer, 0, sizeof(newPasswordBuffer));
     memset(confirmPasswordBuffer, 0, sizeof(confirmPasswordBuffer));
@@ -37,23 +40,36 @@ WalletWindow::WalletWindow() : shouldClose(false), showSettings(false), showArch
 }
 
 WalletWindow::~WalletWindow() {
+    ClearSensitiveSession();
 }
 
 void WalletWindow::SetUserInfo(const std::string& username, const std::string& password) {
     std::cout << "---------- WALLET WINDOW SET USER INFO ----------" << std::endl;
     std::cout << "Setting user info for: " << username << std::endl;
     
+    ClearSensitiveSession();
+    shouldClose = false;
+    std::filesystem::path databasePath;
+    if (!PathSecurity::ValidateUsername(username) ||
+        !PathSecurity::UserDatabasePath(username, databasePath)) {
+        std::cerr << "Refusing to open a session with an unsafe username" << std::endl;
+        return;
+    }
     currentUser = username;
-    userPassword = password;
+    if (!userPassword.assign(password)) {
+        std::cerr << "Failed to retain the session credential securely" << std::endl;
+        return;
+    }
     
     // Initialize encrypted database
     std::cout << "Initializing encrypted database..." << std::endl;
-    std::string db_path = "users/" + username + "_database.pqc";
-    encryptedDatabase = std::make_shared<EncryptedDatabase>(db_path, password);
+    std::string db_path = databasePath.string();
+    encryptedDatabase = std::make_shared<EncryptedDatabase>(db_path, userPassword.get());
     
     if (!encryptedDatabase->initialize()) {
         std::cerr << "Warning: Failed to initialize encrypted database" << std::endl;
-        // Continue without database functionality
+        encryptedDatabase.reset();
+        databaseManagerWindow.reset();
     } else {
         std::cout << "[OK] Encrypted database initialized successfully" << std::endl;
         // Initialize database manager window
@@ -65,7 +81,7 @@ void WalletWindow::SetUserInfo(const std::string& username, const std::string& p
     archiveWindow = std::make_unique<ArchiveWindow>(username);
     
     std::cout << "Initializing archive..." << std::endl;
-    bool success = archiveWindow->Initialize(password);
+    bool success = archiveWindow->Initialize(userPassword.get());
     std::cout << "Archive initialization result: " << (success ? "Success" : "Failed") << std::endl;
     
     std::cout << "Archive loaded state: " << (archiveWindow->IsLoaded() ? "Yes" : "No") << std::endl;
@@ -115,13 +131,13 @@ void WalletWindow::Draw() {
                 if (ImGui::MenuItem("Change Password", "Ctrl+P")) {
                     showChangePasswordDialog = true;
                     // Clear password buffers when opening dialog
-                    memset(oldPasswordBuffer, 0, sizeof(oldPasswordBuffer));
-                    memset(newPasswordBuffer, 0, sizeof(newPasswordBuffer));
-                    memset(confirmPasswordBuffer, 0, sizeof(confirmPasswordBuffer));
+                    SecureMemory::Cleanse(oldPasswordBuffer);
+                    SecureMemory::Cleanse(newPasswordBuffer);
+                    SecureMemory::Cleanse(confirmPasswordBuffer);
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Logout", "Ctrl+L")) {
-                    shouldClose = true;
+                    RequestLogout();
                 }
                 ImGui::EndMenu();
             }
@@ -155,46 +171,52 @@ void WalletWindow::Draw() {
         Settings& topBarSettings = Settings::Instance();
         auto topBarThemeColors = topBarSettings.GetThemeColors();
         
-        // Use accent color with reduced alpha for subtle background
-        ImVec4 topBarBg = ImVec4(
-            topBarThemeColors.accentText[0] * 0.3f,  // Darker accent color
-            topBarThemeColors.accentText[1] * 0.3f,
-            topBarThemeColors.accentText[2] * 0.3f,
-            0.8f  // Slightly transparent
-        );
+        const ImVec4 topBarBg(
+            topBarThemeColors.surfaceElevated[0],
+            topBarThemeColors.surfaceElevated[1],
+            topBarThemeColors.surfaceElevated[2],
+            topBarThemeColors.surfaceElevated[3]);
         
         ImGui::PushStyleColor(ImGuiCol_ChildBg, topBarBg);
-        if (ImGui::BeginChild("TopBar", ImVec2(0, 90), true)) {
-            ImGui::SetCursorPosY(15);
-            ImGui::Indent(20);
-            
-            ImGui::Text("PQC Wallet - Post-Quantum Encrypted Archive");
+        const auto& metrics = Settings::Metrics();
+        const float topBarHeight = metrics.buttonHeight + metrics.windowPadding * 2.0f;
+        if (ImGui::BeginChild("TopBar", ImVec2(0, topBarHeight), true)) {
+            const float rowY = (ImGui::GetWindowHeight() - metrics.buttonHeight) * 0.5f;
+            ImGui::SetCursorPosY(rowY);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("PQC Wallet");
+
+            const float settingsWidth = 82.0f;
+            const float logoutWidth = 82.0f;
+            const std::string userLabel = "User: " + currentUser;
+            const float rightGroupWidth = ImGui::CalcTextSize(userLabel.c_str()).x +
+                settingsWidth + logoutWidth + metrics.itemSpacing * 2.0f;
+            const float rightStart = ImGui::GetWindowWidth() -
+                rightGroupWidth - metrics.windowPadding;
             ImGui::SameLine();
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 200);
-            ImGui::Text("User: %s", currentUser.c_str());
-            
-            ImGui::NewLine();
-            
-            // Settings button în TopBar, înainte de butonul Logout
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 150);
-            Settings::PushBlackButtonText();
-            if (ImGui::Button("Settings", ImVec2(60, 30))) {
+            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), rightStart));
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(userLabel.c_str());
+            ImGui::SameLine();
+
+            if (topBarSettings.Button("Settings", Settings::ButtonVariant::Ghost, 82.0f)) {
                 showSettings = true;
             }
-            Settings::PopBlackButtonText();
-            
             ImGui::SameLine();
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 80);
-            Settings::PushBlackButtonText();
-            if (ImGui::Button("Logout", ImVec2(60, 30))) {
-                shouldClose = true;
+            if (topBarSettings.Button("Logout", Settings::ButtonVariant::Danger, 82.0f)) {
+                RequestLogout();
             }
-            Settings::PopBlackButtonText();
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
         
-        // Main content area
+        // Main workspace: fixed navigation sidebar and responsive content.
+        if (ImGui::BeginChild("Sidebar", ImVec2(metrics.sidebarWidth, 0), true)) {
+            DrawSidebar();
+        }
+        ImGui::EndChild();
+
+        ImGui::SameLine();
         if (ImGui::BeginChild("MainContent", ImVec2(0, 0), false)) {
             DrawMainContent();
         }
@@ -216,6 +238,10 @@ void WalletWindow::Draw() {
     if (showCreateArchiveDialog) {
         ShowCreateArchiveDialog();
     }
+
+    if (showRenameArchiveDialog) {
+        ShowRenameArchiveDialog();
+    }
     
     // Change password dialog
     if (showChangePasswordDialog) {
@@ -233,164 +259,242 @@ void WalletWindow::Draw() {
     }
 }
 
-void WalletWindow::DrawMainContent() {
-    // Get theme-appropriate colors
+void WalletWindow::DrawSidebar() {
     Settings& settings = Settings::Instance();
-    auto themeColors = settings.GetThemeColors();
-    
-    // Folosim doar o singură coloană pentru interfață simplificată
-    ImGui::Columns(1, "MainColumns", false);
-    
-    // Main title
-    ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "PQC Secure Wallet");
-    ImGui::Separator();
+    const auto themeColors = settings.GetThemeColors();
+    const auto& metrics = Settings::Metrics();
+
+    const ImVec4 accent(themeColors.accentText[0], themeColors.accentText[1],
+                        themeColors.accentText[2], themeColors.accentText[3]);
+    const ImVec4 success(themeColors.successText[0], themeColors.successText[1],
+                         themeColors.successText[2], themeColors.successText[3]);
+
+    ImGui::TextColored(accent, "PQC VAULT");
+    ImGui::TextDisabled("Secure workspace");
     ImGui::Spacing();
-    ImGui::Spacing();
-    
-    // User Archives List
-    ImGui::Text("Your Archives");
-    ImGui::Separator();
-    
-    if (userArchives.empty()) {
-        ImGui::TextColored(ImVec4(themeColors.secondaryText[0], themeColors.secondaryText[1], themeColors.secondaryText[2], themeColors.secondaryText[3]), "No archives found for this user");
-    } else {
-        // Create a child window for the list with a scrollbar if needed
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.15f, 0.5f));
-        if (ImGui::BeginChild("ArchivesList", ImVec2(0, 150), true)) {
-            for (size_t i = 0; i < userArchives.size(); i++) {
-                // Highlight the item if it's selected
-                bool isSelected = (selectedArchiveIndex == static_cast<int>(i));
-                
-                if (isSelected) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]));
-                }
-                
-                // Create a selectable item for each archive
-                char label[256];
-                snprintf(label, sizeof(label), "%s##%zu", userArchives[i].c_str(), i);
-                
-                if (ImGui::Selectable(label, isSelected)) {
-                    // Set the selected archive index
-                    selectedArchiveIndex = static_cast<int>(i);
-                }
-                
-                if (isSelected) {
-                    ImGui::PopStyleColor();
-                }
-            }
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleColor();
-    }
-    
-    // Buttons for archive management
-    ImGui::BeginGroup();
-    Settings::PushBlackButtonText();
-    if (ImGui::Button("Open Selected Archive", ImVec2(150, 30))) {
-        OpenSelectedArchive();
-    }
-    Settings::PopBlackButtonText();
-    
-    ImGui::SameLine();
-    
-    Settings::PushBlackButtonText();
-    if (ImGui::Button("Create New Archive", ImVec2(150, 30))) {
+
+    if (settings.IconButton("New archive", Settings::UiIcon::Archive,
+                            Settings::ButtonVariant::Primary,
+                            ImGui::GetContentRegionAvail().x)) {
         CreateNewArchive();
     }
-    Settings::PopBlackButtonText();
-    
-    ImGui::SameLine();
-    
-    Settings::PushBlackButtonText();
-    if (ImGui::Button("Refresh Archives List", ImVec2(150, 30))) {
-        LoadUserArchives();
-    }
-    Settings::PopBlackButtonText();
-    
-    ImGui::SameLine();
-    
-    Settings::PushBlackButtonText();
-    if (ImGui::Button("[DB] Database Manager", ImVec2(150, 30))) {
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("NAVIGATION");
+
+    ImGui::Selectable("Archives", true, ImGuiSelectableFlags_None,
+                      ImVec2(0.0f, metrics.buttonHeight));
+
+    if (ImGui::Selectable("Password vault", false, ImGuiSelectableFlags_None,
+                          ImVec2(0.0f, metrics.buttonHeight))) {
         if (databaseManagerWindow) {
             databaseManagerWindow->setVisible(true);
         }
     }
-    Settings::PopBlackButtonText();
-    ImGui::EndGroup();
-    
+
+    if (ImGui::Selectable("Settings", false, ImGuiSelectableFlags_None,
+                          ImVec2(0.0f, metrics.buttonHeight))) {
+        showSettings = true;
+    }
+
+    if (ImGui::Selectable("Appearance", false, ImGuiSelectableFlags_None,
+                          ImVec2(0.0f, metrics.buttonHeight))) {
+        showFontSettings = true;
+    }
+
     ImGui::Spacing();
+    ImGui::Separator();
+
+    const float statusY = ImGui::GetWindowHeight() - 58.0f;
+    if (ImGui::GetCursorPosY() < statusY) {
+        ImGui::SetCursorPosY(statusY);
+    }
+    ImGui::TextColored(success, "Session protected");
+    ImGui::TextDisabled("AES-256-GCM");
+}
+
+void WalletWindow::DrawMainContent() {
+    Settings& settings = Settings::Instance();
+    const auto themeColors = settings.GetThemeColors();
+    const auto& metrics = Settings::Metrics();
+
+    const ImVec4 accent(themeColors.accentText[0], themeColors.accentText[1],
+                        themeColors.accentText[2], themeColors.accentText[3]);
+    const ImVec4 secondary(themeColors.secondaryText[0], themeColors.secondaryText[1],
+                           themeColors.secondaryText[2], themeColors.secondaryText[3]);
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(accent, "Your archives");
+
+    const float actionWidth = 136.0f + 100.0f + metrics.itemSpacing;
+    const bool compactHeader = ImGui::GetContentRegionAvail().x < 430.0f;
+    if (!compactHeader) {
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),
+            ImGui::GetWindowWidth() - actionWidth - metrics.windowPadding));
+    }
+
+    if (settings.IconButton("New archive", Settings::UiIcon::Archive,
+                            Settings::ButtonVariant::Primary, 136.0f)) {
+        CreateNewArchive();
+    }
+    ImGui::SameLine();
+    if (settings.IconButton("Refresh", Settings::UiIcon::Archive,
+                            Settings::ButtonVariant::Ghost, 100.0f)) {
+        LoadUserArchives();
+    }
+
+    ImGui::TextColored(secondary, "Select an archive, or double-click its card to open it.");
     ImGui::Spacing();
-    
-    // Butonul "Settings" a fost mutat în TopBar
-    
-    ImGui::Spacing();
-    ImGui::Spacing();
-    
-    // Security info
-    ImGui::Text("Post-Quantum Security");
     ImGui::Separator();
     ImGui::Spacing();
-    
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.1f, 0.1f, 0.3f, 0.3f));
-    if (ImGui::BeginChild("SecurityInfo", ImVec2(0, 220), true)) {
-        ImGui::SetCursorPosY(8);
-        ImGui::SetCursorPosX(10);
-        
-        // Usage guide section
-        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "[SHIELD] How Your Data is Protected:");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.primaryText[0], themeColors.primaryText[1], themeColors.primaryText[2], themeColors.primaryText[3]), "• Login: Password protected with quantum-safe encryption");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.primaryText[0], themeColors.primaryText[1], themeColors.primaryText[2], themeColors.primaryText[3]), "• Files: Archives use hybrid classical + post-quantum encryption");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.primaryText[0], themeColors.primaryText[1], themeColors.primaryText[2], themeColors.primaryText[3]), "• Security: Multiple encryption layers protect against quantum attacks");
-        
-        ImGui::Spacing();
-        ImGui::SetCursorPosX(10);
-        
-        // Algorithms section
-        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "[LOCK] Encryption Algorithms:");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ Kyber768: Post-quantum key encapsulation (192-bit security)");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ AES-256-GCM: Authenticated encryption for passwords");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ Scrypt: Hardware-resistant key derivation (N=32768)");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ HMAC-SHA256: Data integrity verification");
-        
-        ImGui::Spacing();
-        ImGui::SetCursorPosX(10);
-        
-        // Security status
-        ImGui::TextColored(ImVec4(themeColors.accentText[0], themeColors.accentText[1], themeColors.accentText[2], themeColors.accentText[3]), "🚀 Security Status:");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ Quantum-resistant encryption active");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ Legacy attack tools neutralized");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.successText[0], themeColors.successText[1], themeColors.successText[2], themeColors.successText[3]), "✓ File permissions secured (600/700)");
-        ImGui::SetCursorPosX(15);
-        ImGui::TextColored(ImVec4(themeColors.warningText[0], themeColors.warningText[1], themeColors.warningText[2], themeColors.warningText[3]), "[!] Enhanced Security v2.0 - Production Ready");
-        
-        // Add a help section at the bottom
-        ImGui::Spacing();
-        ImGui::SetCursorPosX(10);
-        ImGui::TextColored(ImVec4(themeColors.infoText[0], themeColors.infoText[1], themeColors.infoText[2], themeColors.infoText[3]), "💡 Hover over algorithms for technical details");
-        
-        // Optional: Add tooltips for the algorithm names when hovered
-        if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
-            ImGui::Text("Technical Details:");
-            ImGui::Separator();
-            ImGui::Text("• Kyber768: Module Learning With Errors (M-LWE) problem");
-            ImGui::Text("• AES-256-GCM: 256-bit key, 128-bit authentication tag");
-            ImGui::Text("• Scrypt: Memory-hard function, ~32MB memory cost");
-            ImGui::Text("• HMAC-SHA256: SHA-256 based message authentication");
-            ImGui::EndTooltip();
+
+    if (userArchives.empty()) {
+        if (ImGui::BeginChild("EmptyArchives", ImVec2(0, 180.0f), true)) {
+            const char* title = "No archives yet";
+            const char* description = "Create your first encrypted archive to get started.";
+            ImGui::SetCursorPosY(40.0f);
+            ImGui::SetCursorPosX(std::max(metrics.windowPadding,
+                (ImGui::GetWindowWidth() - ImGui::CalcTextSize(title).x) * 0.5f));
+            ImGui::TextUnformatted(title);
+            ImGui::SetCursorPosX(std::max(metrics.windowPadding,
+                (ImGui::GetWindowWidth() - ImGui::CalcTextSize(description).x) * 0.5f));
+            ImGui::TextColored(secondary, "%s", description);
+
+            const float createWidth = 148.0f;
+            ImGui::SetCursorPosX(std::max(metrics.windowPadding,
+                (ImGui::GetWindowWidth() - createWidth) * 0.5f));
+            if (settings.Button("Create archive", Settings::ButtonVariant::Primary,
+                                createWidth)) {
+                CreateNewArchive();
+            }
+        }
+        ImGui::EndChild();
+        return;
+    }
+
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    const int columnCount = std::max(1, static_cast<int>(
+        (availableWidth + metrics.itemSpacing) /
+        (metrics.archiveCardMinWidth + metrics.itemSpacing)));
+    const float cardWidth = (availableWidth -
+        metrics.itemSpacing * static_cast<float>(columnCount - 1)) /
+        static_cast<float>(columnCount);
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float cardHeight = std::max(metrics.archiveCardHeight,
+        style.WindowPadding.y * 2.0f + ImGui::GetTextLineHeight() * 2.0f +
+        style.ItemSpacing.y * 3.0f + metrics.buttonHeight);
+    int archiveToOpen = -1;
+
+    for (size_t i = 0; i < userArchives.size(); ++i) {
+        const bool selected = selectedArchiveIndex == static_cast<int>(i);
+        const ImVec4 cardBackground(
+            themeColors.surfaceElevated[0], themeColors.surfaceElevated[1],
+            themeColors.surfaceElevated[2], themeColors.surfaceElevated[3]);
+        const ImVec4 cardBorder = selected
+            ? accent
+            : ImVec4(themeColors.border[0], themeColors.border[1],
+                     themeColors.border[2], themeColors.border[3]);
+
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, cardBackground);
+        ImGui::PushStyleColor(ImGuiCol_Border, cardBorder);
+        if (ImGui::BeginChild("ArchiveCard", ImVec2(cardWidth, cardHeight),
+                              true, ImGuiWindowFlags_NoScrollbar |
+                                    ImGuiWindowFlags_NoScrollWithMouse)) {
+            ImGui::TextColored(secondary, "ENCRYPTED ARCHIVE");
+            if (selected) {
+                const char* selectedLabel = "SELECTED";
+                ImGui::SameLine();
+                ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),
+                    ImGui::GetWindowWidth() - style.WindowPadding.x -
+                    ImGui::CalcTextSize(selectedLabel).x));
+                ImGui::TextColored(accent, "%s", selectedLabel);
+            }
+
+            ImGui::Spacing();
+            ImGui::TextUnformatted(userArchives[i].c_str());
+            if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
+                ImGui::TextUnformatted(userArchives[i].c_str());
+                ImGui::EndTooltip();
+            }
+
+            const float actionY = ImGui::GetWindowHeight() - style.WindowPadding.y -
+                                  metrics.buttonHeight;
+            const float separatorY = actionY - style.ItemSpacing.y;
+            const ImVec2 windowPos = ImGui::GetWindowPos();
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2(windowPos.x + style.WindowPadding.x, windowPos.y + separatorY),
+                ImVec2(windowPos.x + ImGui::GetWindowWidth() - style.WindowPadding.x,
+                       windowPos.y + separatorY),
+                ImGui::GetColorU32(ImGuiCol_Border));
+
+            ImGui::SetCursorPosY(actionY);
+            const float actionWidth = ImGui::GetContentRegionAvail().x;
+            const float renameWidth = 100.0f;
+            const float openWidth = std::max(70.0f,
+                actionWidth - renameWidth - style.ItemSpacing.x);
+            bool actionHovered = false;
+            if (settings.IconButton("Open", Settings::UiIcon::Archive,
+                                    selected ? Settings::ButtonVariant::Primary
+                                             : Settings::ButtonVariant::Ghost,
+                                    openWidth)) {
+                selectedArchiveIndex = static_cast<int>(i);
+                archiveToOpen = static_cast<int>(i);
+            }
+            actionHovered = ImGui::IsItemHovered();
+
+            ImGui::SameLine();
+            if (settings.IconButton("Rename", Settings::UiIcon::File,
+                                    Settings::ButtonVariant::Secondary,
+                                    renameWidth)) {
+                selectedArchiveIndex = static_cast<int>(i);
+                BeginRenameArchive(userArchives[i]);
+            }
+            actionHovered = actionHovered || ImGui::IsItemHovered();
+
+            const bool cardHovered =
+                ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+            float& hoverAnimation = archiveCardHoverAnimation[userArchives[i]];
+            const float hoverTarget = cardHovered ? 1.0f : 0.0f;
+            hoverAnimation += (hoverTarget - hoverAnimation) *
+                std::min(1.0f, ImGui::GetIO().DeltaTime * 12.0f);
+            if (!selected && hoverAnimation > 0.01f) {
+                const ImVec2 cardPosition = ImGui::GetWindowPos();
+                const ImVec2 cardSize = ImGui::GetWindowSize();
+                ImVec4 animatedBorder = accent;
+                animatedBorder.w *= 0.75f * hoverAnimation;
+                ImGui::GetWindowDrawList()->AddRect(
+                    ImVec2(cardPosition.x + 0.5f, cardPosition.y + 0.5f),
+                    ImVec2(cardPosition.x + cardSize.x - 0.5f,
+                           cardPosition.y + cardSize.y - 0.5f),
+                    ImGui::GetColorU32(animatedBorder), metrics.childRounding,
+                    0, 1.0f + hoverAnimation);
+            }
+
+            if (!actionHovered && cardHovered) {
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    selectedArchiveIndex = static_cast<int>(i);
+                }
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    selectedArchiveIndex = static_cast<int>(i);
+                    archiveToOpen = static_cast<int>(i);
+                }
+            }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+        ImGui::PopID();
+
+        if ((static_cast<int>(i) + 1) % columnCount != 0 && i + 1 < userArchives.size()) {
+            ImGui::SameLine();
         }
     }
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
+
+    if (archiveToOpen >= 0) {
+        selectedArchiveIndex = archiveToOpen;
+        OpenSelectedArchive();
+    }
 }
 
 // Funcția DrawSendForm a fost eliminată deoarece nu mai este utilizată
@@ -425,16 +529,12 @@ void WalletWindow::DrawSettings() {
         
         // Backup Settings
         ImGui::TextColored(ImVec4(themeColors.secondaryText[0], themeColors.secondaryText[1], themeColors.secondaryText[2], themeColors.secondaryText[3]), "[SAVE] Backup & Recovery");
-        ImGui::Checkbox("Automatic backup", &tempEnableAutoBackup);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Automatically create encrypted backups of archives");
-        }
-        
+        ImGui::BeginDisabled(true);
+        ImGui::Checkbox("Automatic backup (requires OS keychain)", &tempEnableAutoBackup);
         ImGui::Text("Backup retention (days):");
         ImGui::SliderInt("##backupDays", &tempBackupRetentionDays, 1, 365, "%d days");
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("How long to keep backup files before automatic cleanup");
-        }
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("Manual encrypted database backup is available in Database Manager.");
         
         ImGui::Spacing();
         ImGui::Separator();
@@ -633,7 +733,8 @@ void WalletWindow::OpenSelectedArchive() {
         std::cout << "Opening archive: '" << selectedArchive << "' for user: " << currentUser << std::endl;
         
         // Debug: Print current archive path before loading
-        std::string expectedPath = "archives/" + currentUser + "_" + selectedArchive + ".enc";
+        CryptoArchive selectedArchivePath(currentUser, selectedArchive);
+        std::string expectedPath = selectedArchivePath.GetArchiveFilePath();
         std::cout << "Expected archive file path: " << expectedPath << std::endl;
         std::cout << "File exists: " << (std::filesystem::exists(expectedPath) ? "Yes" : "No") << std::endl;
         
@@ -654,7 +755,7 @@ void WalletWindow::OpenSelectedArchive() {
         std::cout << "Initializing archive with name: " << selectedArchive << std::endl;
         
         // Important: Load the specific archive
-        bool success = archiveWindow->LoadArchive(selectedArchive, userPassword);
+        bool success = archiveWindow->LoadArchive(selectedArchive, userPassword.get());
         
         if (success) {
             std::cout << "Successfully loaded archive: " << selectedArchive << std::endl;
@@ -668,7 +769,7 @@ void WalletWindow::OpenSelectedArchive() {
             std::cout << "Failed to load archive: " << selectedArchive << std::endl;
             // Try to initialize with default if loading specific archive failed
             std::cout << "Attempting to fall back to default initialization..." << std::endl;
-            if (archiveWindow->Initialize(userPassword)) {
+            if (archiveWindow->Initialize(userPassword.get())) {
                 archiveWindow->Show();
                 std::cout << "Fallback to default archive successful" << std::endl;
             } else {
@@ -682,74 +783,205 @@ void WalletWindow::OpenSelectedArchive() {
 }
 
 void WalletWindow::ShowCreateArchiveDialog() {
-    ImGui::SetNextWindowSize(ImVec2(400, 250), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), 
-                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    
-    if (ImGui::Begin("Create New Archive", &showCreateArchiveDialog, 
-                   ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
-        
-        ImGui::TextWrapped("Create a new secure archive. Enter a unique name for the archive below:");
-        ImGui::Spacing();
-        
-        ImGui::Text("Archive Name:");
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputText("##archivename", newArchiveNameBuffer, sizeof(newArchiveNameBuffer));
-        
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-        
-        static std::string errorMsg;
-        
-        // Show any error message
-        if (!errorMsg.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", errorMsg.c_str());
+    Settings& settings = Settings::Instance();
+    const auto themeColors = settings.GetThemeColors();
+    const auto& metrics = Settings::Metrics();
+    static std::string errorMessage;
+
+    ImGui::SetNextWindowSize(ImVec2(480.0f, 310.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::Begin("Create archive", &showCreateArchiveDialog,
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+                         ImGuiWindowFlags_NoSavedSettings)) {
+        settings.DialogHeader(Settings::UiIcon::Archive, "Create archive",
+                              "Create a new authenticated encrypted container.");
+
+        ImGui::TextUnformatted("Archive name");
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+        const bool submittedWithEnter = ImGui::InputText(
+            "##archiveName", newArchiveNameBuffer, sizeof(newArchiveNameBuffer),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+
+        if (!errorMessage.empty()) {
+            const ImVec4 errorColor(themeColors.errorText[0], themeColors.errorText[1],
+                                    themeColors.errorText[2], themeColors.errorText[3]);
             ImGui::Spacing();
-        }
-        
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 200) * 0.5f);
-        
-        Settings::PushBlackButtonText();
-        if (ImGui::Button("Create Archive", ImVec2(200, 30))) {
-            std::string archiveName(newArchiveNameBuffer);
-            
-            // Validare nume arhivă
-            if (archiveName.empty()) {
-                errorMsg = "Please enter an archive name.";
-            } else if (archiveName.find_first_of("/\\:*?\"<>|") != std::string::npos) {
-                errorMsg = "Archive name contains invalid characters.";
-            } else {
-                // Încearcă să creeze noua arhivă
-                if (CryptoArchive::CreateNewArchive(currentUser, userPassword, archiveName)) {
-                    errorMsg.clear();
-                    memset(newArchiveNameBuffer, 0, sizeof(newArchiveNameBuffer));
-                    LoadUserArchives(); // Reîncarcă lista de arhive
-                    showCreateArchiveDialog = false;
-                } else {
-                    errorMsg = "An archive with this name already exists.";
-                }
+            ImGui::PushStyleColor(
+                ImGuiCol_ChildBg,
+                ImVec4(errorColor.x, errorColor.y, errorColor.z, 0.08f));
+            ImGui::PushStyleColor(
+                ImGuiCol_Border,
+                ImVec4(errorColor.x, errorColor.y, errorColor.z, 0.45f));
+            if (ImGui::BeginChild("CreateArchiveError", ImVec2(0.0f, 58.0f), true,
+                                  ImGuiWindowFlags_NoScrollbar)) {
+                settings.DrawIcon(Settings::UiIcon::Error, errorColor, 18.0f);
+                ImGui::SameLine(0.0f, metrics.itemSpacing);
+                ImGui::TextWrapped("%s", errorMessage.c_str());
             }
+            ImGui::EndChild();
+            ImGui::PopStyleColor(2);
         }
-        Settings::PopBlackButtonText();
-        
-        ImGui::Spacing();
-        
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 100) * 0.5f);
-        Settings::PushBlackButtonText();
-        if (ImGui::Button("Cancel", ImVec2(100, 25))) {
-            errorMsg.clear();
+
+        const float footerY = ImGui::GetWindowHeight() - metrics.windowPadding -
+                              metrics.buttonHeight;
+        if (ImGui::GetCursorPosY() < footerY) {
+            ImGui::SetCursorPosY(footerY);
+        }
+        const float footerWidth = 100.0f + 140.0f + metrics.itemSpacing;
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - footerWidth) * 0.5f);
+        const bool cancelRequested =
+            settings.Button("Cancel", Settings::ButtonVariant::Ghost, 100.0f);
+        ImGui::SameLine();
+        const bool createButtonPressed = settings.IconButton(
+            "Create", Settings::UiIcon::Archive,
+            Settings::ButtonVariant::Primary, 140.0f);
+        const bool createRequested = submittedWithEnter || createButtonPressed;
+
+        if (cancelRequested) {
+            errorMessage.clear();
             memset(newArchiveNameBuffer, 0, sizeof(newArchiveNameBuffer));
             showCreateArchiveDialog = false;
+        } else if (createRequested) {
+            const std::string archiveName(newArchiveNameBuffer);
+            std::string validationError;
+            if (!PathSecurity::ValidateArchiveName(archiveName, &validationError)) {
+                errorMessage = validationError;
+            } else if (!CryptoArchive::CreateNewArchive(
+                           currentUser, userPassword.get(), archiveName)) {
+                errorMessage = "An archive with this name already exists.";
+            } else {
+                errorMessage.clear();
+                memset(newArchiveNameBuffer, 0, sizeof(newArchiveNameBuffer));
+                LoadUserArchives();
+                const auto created =
+                    std::find(userArchives.begin(), userArchives.end(), archiveName);
+                selectedArchiveIndex = created == userArchives.end()
+                    ? -1
+                    : static_cast<int>(std::distance(userArchives.begin(), created));
+                showCreateArchiveDialog = false;
+            }
         }
-        Settings::PopBlackButtonText();
     }
-    
     ImGui::End();
-}
 
+    if (!showCreateArchiveDialog) {
+        errorMessage.clear();
+        memset(newArchiveNameBuffer, 0, sizeof(newArchiveNameBuffer));
+    }
+}
 void WalletWindow::CreateNewArchive() {
     showCreateArchiveDialog = true;
+}
+
+void WalletWindow::BeginRenameArchive(const std::string& archiveName) {
+    archiveBeingRenamed = archiveName;
+    renameArchiveError.clear();
+    memset(renameArchiveNameBuffer, 0, sizeof(renameArchiveNameBuffer));
+    std::strncpy(renameArchiveNameBuffer, archiveName.c_str(),
+                 sizeof(renameArchiveNameBuffer) - 1);
+    showRenameArchiveDialog = true;
+}
+
+void WalletWindow::ShowRenameArchiveDialog() {
+    Settings& settings = Settings::Instance();
+    const auto themeColors = settings.GetThemeColors();
+    const auto& metrics = Settings::Metrics();
+
+    ImGui::SetNextWindowSize(ImVec2(480.0f, 330.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(
+        ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f,
+               ImGui::GetIO().DisplaySize.y * 0.5f),
+        ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::Begin("Rename archive", &showRenameArchiveDialog,
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+        settings.DialogHeader(Settings::UiIcon::Archive, "Rename archive",
+                              "The encrypted contents remain unchanged.");
+        ImGui::Text("Current name: %s", archiveBeingRenamed.c_str());
+        ImGui::Spacing();
+        ImGui::TextUnformatted("New archive name");
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+        const bool submittedWithEnter = ImGui::InputText(
+            "##renameArchiveName", renameArchiveNameBuffer,
+            sizeof(renameArchiveNameBuffer), ImGuiInputTextFlags_EnterReturnsTrue);
+
+        if (!renameArchiveError.empty()) {
+            ImGui::Spacing();
+            ImGui::TextColored(
+                ImVec4(themeColors.errorText[0], themeColors.errorText[1],
+                       themeColors.errorText[2], themeColors.errorText[3]),
+                "%s", renameArchiveError.c_str());
+        }
+
+        const float buttonY = ImGui::GetWindowHeight() - metrics.windowPadding -
+                              metrics.buttonHeight;
+        if (ImGui::GetCursorPosY() < buttonY) {
+            ImGui::SetCursorPosY(buttonY);
+        }
+
+        const float buttonGroupWidth = 120.0f + 100.0f + metrics.itemSpacing;
+        ImGui::SetCursorPosX(std::max(metrics.windowPadding,
+            (ImGui::GetWindowWidth() - buttonGroupWidth) * 0.5f));
+        const bool renameButtonPressed = settings.IconButton(
+            "Rename", Settings::UiIcon::File,
+            Settings::ButtonVariant::Primary, 120.0f);
+        const bool renameRequested = submittedWithEnter || renameButtonPressed;
+        ImGui::SameLine();
+        const bool cancelRequested =
+            settings.Button("Cancel", Settings::ButtonVariant::Ghost, 100.0f);
+
+        if (renameRequested) {
+            const std::string newName(renameArchiveNameBuffer);
+            const std::string previousName = archiveBeingRenamed;
+            std::string validationError;
+            if (!PathSecurity::ValidateArchiveName(newName, &validationError)) {
+                renameArchiveError = validationError;
+            } else if (CryptoArchive::RenameArchive(
+                           currentUser, previousName, newName, &renameArchiveError)) {
+                const bool reloadArchiveWindow = archiveWindow &&
+                    archiveWindow->GetArchiveName() == previousName;
+                const bool restoreVisibility = reloadArchiveWindow &&
+                    archiveWindow->IsVisible();
+
+                if (reloadArchiveWindow) {
+                    archiveWindow.reset();
+                    archiveWindow = std::make_unique<ArchiveWindow>(currentUser);
+                    if (archiveWindow->LoadArchive(newName, userPassword.get()) &&
+                        restoreVisibility) {
+                        archiveWindow->Show();
+                    }
+                }
+
+                LoadUserArchives();
+                const auto renamed = std::find(userArchives.begin(), userArchives.end(), newName);
+                selectedArchiveIndex = renamed == userArchives.end()
+                    ? -1
+                    : static_cast<int>(std::distance(userArchives.begin(), renamed));
+
+                showRenameArchiveDialog = false;
+                archiveBeingRenamed.clear();
+                renameArchiveError.clear();
+                memset(renameArchiveNameBuffer, 0, sizeof(renameArchiveNameBuffer));
+            }
+        } else if (cancelRequested) {
+            showRenameArchiveDialog = false;
+        }
+    }
+    ImGui::End();
+
+    if (!showRenameArchiveDialog) {
+        archiveBeingRenamed.clear();
+        renameArchiveError.clear();
+        memset(renameArchiveNameBuffer, 0, sizeof(renameArchiveNameBuffer));
+    }
 }
 
 void WalletWindow::DrawFontSettings() {
@@ -784,7 +1016,8 @@ void WalletWindow::DrawFontSettings() {
             }
             
             if (ImGui::Combo("##FontCombo", &selectedFontIndex, fontItems.data(), fontItems.size())) {
-                if (selectedFontIndex >= 0 && selectedFontIndex < availableFonts.size()) {
+                if (selectedFontIndex >= 0 &&
+                    selectedFontIndex < static_cast<int>(availableFonts.size())) {
                     std::string selectedFont = availableFonts[selectedFontIndex];
                     m_fontManager->SetActiveFont(selectedFont);
                     std::cout << "Font changed to: " << selectedFont << std::endl;
@@ -876,9 +1109,9 @@ void WalletWindow::DrawFontSettings() {
 }
 
 void WalletWindow::ShowChangePasswordDialog() {
-    ImGui::SetNextWindowSize(ImVec2(450, 300), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), 
-                           ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(540.0f, 480.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                           ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     
     if (ImGui::Begin("Change User Password", &showChangePasswordDialog, 
                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
@@ -886,11 +1119,14 @@ void WalletWindow::ShowChangePasswordDialog() {
         // Get fresh theme-appropriate colors for each dialog render
         Settings& dialogSettings = Settings::Instance();
         auto dialogThemeColors = dialogSettings.GetThemeColors();
-        
-        ImGui::TextColored(ImVec4(dialogThemeColors.warningText[0], dialogThemeColors.warningText[1], dialogThemeColors.warningText[2], dialogThemeColors.warningText[3]), "Warning: Changing your password affects ALL your archives");
-        ImGui::TextWrapped("This will update the password for your user account and all associated archives. Ensure you remember your new password, as there is no recovery option if you forget it.");
-        ImGui::Spacing();
-        ImGui::Separator();
+
+        dialogSettings.DialogHeader(
+            Settings::UiIcon::Lock, "Change master password",
+            "Re-encrypts the account, password vault, and every archive.");
+        ImGui::TextColored(
+            ImVec4(dialogThemeColors.warningText[0], dialogThemeColors.warningText[1],
+                   dialogThemeColors.warningText[2], dialogThemeColors.warningText[3]),
+            "There is no recovery option if the new password is forgotten.");
         ImGui::Spacing();
         
         // Old password input
@@ -944,64 +1180,95 @@ void WalletWindow::ShowChangePasswordDialog() {
         float startX = (windowWidth - buttonsWidth) * 0.5f;
         
         ImGui::SetCursorPosX(startX);
-        Settings::PushBlackButtonText();
-        if (ImGui::Button("Change Password", ImVec2(140, 30))) {
-            std::string oldPassword(oldPasswordBuffer);
-            std::string newPassword(newPasswordBuffer);
-            std::string confirmPassword(confirmPasswordBuffer);
+        if (dialogSettings.Button("Change password", Settings::ButtonVariant::Primary,
+                                  140.0f)) {
+            SecureMemory::SecureString oldPassword(oldPasswordBuffer);
+            SecureMemory::SecureString newPassword(newPasswordBuffer);
+            SecureMemory::SecureString confirmPassword(confirmPasswordBuffer);
+            SecureMemory::Cleanse(oldPasswordBuffer);
+            SecureMemory::Cleanse(newPasswordBuffer);
+            SecureMemory::Cleanse(confirmPasswordBuffer);
             
             // Validate inputs
             if (oldPassword.empty() || newPassword.empty() || confirmPassword.empty()) {
                 errorMsg = "All fields are required.";
-            } else if (newPassword != confirmPassword) {
+            } else if (!newPassword.equals(confirmPassword.get())) {
                 errorMsg = "New passwords do not match.";
-            } else if (newPassword.length() < 8) {
+            } else if (newPassword.size() < 8) {
                 errorMsg = "New password must be at least 8 characters.";
-            } else if (oldPassword != userPassword) {
+            } else if (!userPassword.equals(oldPassword.get())) {
                 errorMsg = "Current password is incorrect.";
             } else {
-                // Change password using PasswordManager
                 PasswordManager pm;
-                if (pm.ChangeMasterPassword(currentUser, oldPassword, newPassword)) {
-                    // Update the stored password
-                    userPassword = newPassword;
-                    
-                    // Update password in archive window if it exists
-                    if (archiveWindow) {
-                        // Archive will need to be reloaded with new password
-                        std::cout << "Password changed - archive will need to be reopened" << std::endl;
-                    }
-                    
-                    errorMsg.clear();
-                    
-                    // Clear fields and close dialog
-                    memset(oldPasswordBuffer, 0, sizeof(oldPasswordBuffer));
-                    memset(newPasswordBuffer, 0, sizeof(newPasswordBuffer));
-                    memset(confirmPasswordBuffer, 0, sizeof(confirmPasswordBuffer));
-                    showChangePasswordDialog = false;
-                    
-                    // Show success message (you might want to add a status message system)
-                    std::cout << "Password changed successfully for user: " << currentUser << std::endl;
+                if (pm.ChangeMasterPassword(currentUser, oldPassword.get(),
+                                            newPassword.get(), encryptedDatabase.get())) {
+                        // Update the stored password
+                        userPassword.assign(newPassword.get());
+
+                        // The old archive owner still retains the previous key.
+                        // Destroy it so it cannot accidentally overwrite a newly
+                        // re-keyed archive. It will be reopened on demand.
+                        archiveWindow.reset();
+                        showArchive = false;
+
+                        errorMsg.clear();
+
+                        // Clear fields and close dialog
+                        SecureMemory::Cleanse(oldPasswordBuffer);
+                        SecureMemory::Cleanse(newPasswordBuffer);
+                        SecureMemory::Cleanse(confirmPasswordBuffer);
+                        showChangePasswordDialog = false;
+
+                        std::cout << "Password changed successfully for user: "
+                                  << currentUser << std::endl;
                 } else {
-                    errorMsg = "Failed to change password. Please try again or check console for details.";
+                    errorMsg = "Password transaction failed. Existing data still uses the old password.";
                 }
             }
         }
-        Settings::PopBlackButtonText();
-        
         ImGui::SameLine();
         ImGui::SetCursorPosX(startX + 160);
-        Settings::PushBlackButtonText();
-        if (ImGui::Button("Cancel", ImVec2(140, 30))) {
+        if (dialogSettings.Button("Cancel", Settings::ButtonVariant::Ghost,
+                                  140.0f)) {
             // Clear fields and error message
-            memset(oldPasswordBuffer, 0, sizeof(oldPasswordBuffer));
-            memset(newPasswordBuffer, 0, sizeof(newPasswordBuffer));
-            memset(confirmPasswordBuffer, 0, sizeof(confirmPasswordBuffer));
+            SecureMemory::Cleanse(oldPasswordBuffer);
+            SecureMemory::Cleanse(newPasswordBuffer);
+            SecureMemory::Cleanse(confirmPasswordBuffer);
             errorMsg.clear();
             showChangePasswordDialog = false;
         }
-        Settings::PopBlackButtonText();
     }
     
     ImGui::End();
+    if (!showChangePasswordDialog) {
+        SecureMemory::Cleanse(oldPasswordBuffer);
+        SecureMemory::Cleanse(newPasswordBuffer);
+        SecureMemory::Cleanse(confirmPasswordBuffer);
+        showOldPassword = false;
+        showNewPassword = false;
+    }
+}
+
+void WalletWindow::ClearSensitiveSession() {
+    databaseManagerWindow.reset();
+    encryptedDatabase.reset();
+    archiveWindow.reset();
+    userPassword.clear();
+    SecureMemory::Cleanse(oldPasswordBuffer);
+    SecureMemory::Cleanse(newPasswordBuffer);
+    SecureMemory::Cleanse(confirmPasswordBuffer);
+    memset(renameArchiveNameBuffer, 0, sizeof(renameArchiveNameBuffer));
+    archiveBeingRenamed.clear();
+    renameArchiveError.clear();
+    archiveCardHoverAnimation.clear();
+    showRenameArchiveDialog = false;
+    showChangePasswordDialog = false;
+    showOldPassword = false;
+    showNewPassword = false;
+}
+
+void WalletWindow::RequestLogout() {
+    ClearSensitiveSession();
+    currentUser.clear();
+    shouldClose = true;
 }

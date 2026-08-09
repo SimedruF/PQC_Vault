@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include "SecureMemory.h"
 
 class FirstTimeSetupWindow {
 public:

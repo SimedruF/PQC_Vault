@@ -1,11 +1,13 @@
 #pragma once
 #include <string>
 #include <memory>
+#include <unordered_map>
 #include "ArchiveWindow.h"
 #include "FontManager.h"
 #include "Settings.h"
 #include "EncryptedDatabase.h"
 #include "DatabaseManagerWindow.h"
+#include "SecureMemory.h"
 
 class WalletWindow {
 public:
@@ -19,11 +21,12 @@ public:
     
 private:
     std::string currentUser;
-    std::string userPassword;
+    SecureMemory::SecureString userPassword;
     bool shouldClose;
     bool showSettings;
     bool showArchive;
     bool showCreateArchiveDialog;
+    bool showRenameArchiveDialog;
     bool showFontSettings;
     bool showChangePasswordDialog;
     bool showDatabaseManager;
@@ -51,9 +54,15 @@ private:
     // User's archives list
     std::vector<std::string> userArchives;
     int selectedArchiveIndex;
+    std::unordered_map<std::string, float> archiveCardHoverAnimation;
     
     // New archive creation
     char newArchiveNameBuffer[256];
+
+    // Archive rename dialog
+    char renameArchiveNameBuffer[256];
+    std::string archiveBeingRenamed;
+    std::string renameArchiveError;
     
     // Archive management
     std::unique_ptr<ArchiveWindow> archiveWindow;
@@ -67,10 +76,15 @@ private:
     void OpenSelectedArchive();
     void CreateNewArchive();
     void ShowCreateArchiveDialog();
+    void BeginRenameArchive(const std::string& archiveName);
+    void ShowRenameArchiveDialog();
     
+    void DrawSidebar();
     void DrawMainContent();
     void DrawSettings();
     void DrawFontSettings();
     void ShowChangePasswordDialog();
     void LoadSettingsToUI();
+    void ClearSensitiveSession();
+    void RequestLogout();
 };

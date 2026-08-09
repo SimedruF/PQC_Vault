@@ -40,7 +40,7 @@ public:
      * @brief Show/hide the window
      * @param show Whether to show the window
      */
-    void setVisible(bool show) { show_window_ = show; }
+    void setVisible(bool show);
     
     /**
      * @brief Check if window is visible
@@ -59,15 +59,22 @@ private:
     char new_website_[256];
     char new_password_[256];
     char confirm_password_[256];
+    char verification_password_[256];
+    char backup_path_[512];
+    char backup_password_[256];
+    char backup_confirm_password_[256];
     bool show_add_user_popup_;
     bool show_edit_user_popup_;
     bool show_delete_confirmation_;
+    bool show_export_backup_popup_;
+    bool show_import_backup_popup_;
+    bool show_backup_password_;
+    bool confirm_restore_;
     bool show_passwords_;
     
     // Current user data
     std::string selected_username_;
-    std::string current_plain_password_; // For showing the password for selected user
-    std::map<std::string, std::string> session_passwords_; // Store passwords for current session
+    bool password_verified_;
     std::vector<std::string> filtered_usernames_;
     
     // Error handling
@@ -104,6 +111,7 @@ private:
      * @brief Render the delete confirmation popup
      */
     void renderDeleteConfirmation();
+    void renderBackupPopups();
     
     /**
      * @brief Render database statistics
@@ -139,6 +147,8 @@ private:
      * @brief Clear all input fields
      */
     void clearInputFields();
+    void clearSensitiveUiState();
+    void clearBackupSensitiveState();
     
     /**
      * @brief Show error message

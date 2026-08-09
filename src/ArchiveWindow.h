@@ -32,6 +32,7 @@ public:
     
     // Check if archive is loaded
     bool IsLoaded() const;
+    std::string GetArchiveName() const;
     
     // Show/hide window
     void Show();
@@ -46,8 +47,14 @@ public:
     // Helper to get standard dialog position (centered - 10% from edges)
     ImVec2 GetStandardDialogPosition() const;
 private:
+    enum class NotificationKind {
+        Info,
+        Success,
+        Warning,
+        Error
+    };
+
     std::string m_username;
-    std::string m_password;
     std::unique_ptr<CryptoArchive> m_archive;
     bool m_isVisible;
     bool m_isLoaded;
@@ -61,11 +68,24 @@ private:
     bool m_showAddFileDialog;
     bool m_showExtractDialog;
     bool m_showFileViewer;
+    bool m_showArchiveStats;
+    bool m_showResetConfirmation;
+    bool m_showReloadConfirmation;
+    bool m_openRemoveConfirmation;
+    std::string m_filePendingRemoval;
+    std::string m_addFileError;
+    std::string m_extractFileError;
    // PreviewType m_previewType;  // Tipul de previzualizare curent
     std::vector<uint8_t> m_textPreviewData;  // Date pentru previzualizare text
     std::vector<uint8_t> m_imagePreviewData; // Date pentru previzualizare imagine
     std::string m_statusMessage;
     float m_statusMessageTime;
+    float m_statusMessageDuration;
+    NotificationKind m_statusMessageKind;
+    ImVec2 m_dropZoneMin;
+    ImVec2 m_dropZoneMax;
+    bool m_dropZoneValid;
+    float m_dropFeedbackTime;
 
     // Preview data
     PreviewType m_previewType;
@@ -85,6 +105,7 @@ private:
     std::string GetFileTypeIcon(const std::string& filename) const;
     void SetStatusMessage(const std::string& message, float duration = 3.0f);
     void UpdateStatusMessage();
+    void DrawToastNotification();
     
     // File type detection
     bool IsImageFile(const std::string& filename) const;
@@ -100,6 +121,10 @@ private:
     void ResetPreview() {
         m_showFileViewer = false;
         m_previewType = PreviewType::NONE;
+        SecureMemory::Cleanse(m_previewData);
+        SecureMemory::Cleanse(m_textPreviewData);
+        SecureMemory::Cleanse(m_imagePreviewData);
+        m_previewData.clear();
         m_textPreviewData.clear();
         m_imagePreviewData.clear();
     }

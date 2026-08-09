@@ -1,0 +1,121 @@
+name: Security CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-sanitizers:
+    name: Linux ${{ matrix.build_type }} ASan+UBSan
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev libglfw3-dev libgl1-mesa-dev
+      - name: Build bundled liboqs
+        run: |
+          cmake -S liboqs -B liboqs/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOQS_BUILD_ONLY_LIB=ON \
+            -DBUILD_SHARED_LIBS=OFF
+          cmake --build liboqs/build --parallel 2
+      - name: Configure
+        run: |
+          cmake -S . -B build/security-${{ matrix.build_type }} -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DBUILD_TESTING=ON \
+            -DPQCWALLET_ENABLE_ASAN=ON \
+            -DPQCWALLET_ENABLE_UBSAN=ON
+      - name: Build
+        run: cmake --build build/security-${{ matrix.build_type }} --parallel 2
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build/security-${{ matrix.build_type }} --output-on-failure
+
+  fuzz-smoke:
+    name: Clang libFuzzer smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang ninja-build libssl-dev libglfw3-dev libgl1-mesa-dev
+      - name: Build bundled liboqs
+        run: |
+          CC=clang CXX=clang++ cmake -S liboqs -B liboqs/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOQS_BUILD_ONLY_LIB=ON \
+            -DBUILD_SHARED_LIBS=OFF
+          cmake --build liboqs/build --parallel 2
+      - name: Build fuzz target
+        run: |
+          CC=clang CXX=clang++ cmake -S . -B build/fuzz -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DBUILD_TESTING=OFF \
+            -DPQCWALLET_BUILD_FUZZERS=ON
+          cmake --build build/fuzz --target format_parser_fuzz --parallel 2
+      - name: Run bounded fuzzing campaign
+        run: |
+          mkdir -p build/fuzz-corpus
+          cp -R fuzz/corpus/. build/fuzz-corpus/
+          build/fuzz/format_parser_fuzz build/fuzz-corpus -runs=20000 -max_len=1048576 -timeout=10
+
+  windows-build-and-atomic-write:
+    name: Windows Release and atomic replacement
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        run: vcpkg install openssl:x64-windows-static glfw3:x64-windows-static
+      - name: Build and install bundled liboqs
+        shell: pwsh
+        run: |
+          cmake -S liboqs -B liboqs/build-windows -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DOQS_BUILD_ONLY_LIB=ON `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DCMAKE_INSTALL_PREFIX="$pwd/third_party/liboqs/install" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+          cmake --build liboqs/build-windows --target install --parallel 2
+      - name: Configure and build PQCWallet
+        shell: pwsh
+        run: |
+          cmake -S . -B build/windows -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_TESTING=ON `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+          cmake --build build/windows --parallel 2
+      - name: Run security tests including atomic replacement
+        shell: pwsh
+        run: ctest --test-dir build/windows --output-on-failure -C Release
+
+  security-gate:
+    name: Security gate
+    if: always()
+    needs: [linux-sanitizers, fuzz-smoke, windows-build-and-atomic-write]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every security job
+        env:
+          LINUX_RESULT: ${{ needs.linux-sanitizers.result }}
+          FUZZ_RESULT: ${{ needs.fuzz-smoke.result }}
+          WINDOWS_RESULT: ${{ needs.windows-build-and-atomic-write.result }}
+        run: test "$LINUX_RESULT" = success && test "$FUZZ_RESULT" = success && test "$WINDOWS_RESULT" = success

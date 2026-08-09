@@ -3,12 +3,9 @@
 
 #include <string>
 #include <vector>
+#include "SecureMemory.h"
 #include <map>
-#include <memory>
 #include <sstream>
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <oqs/oqs.h>
 
 // Simple JSON-like structure for our database
 struct SimpleJSON {
@@ -158,7 +155,7 @@ struct SimpleJSON {
  * - Encrypted passwords
  * - User metadata
  * 
- * Uses SPHINCS+ for digital signatures and AES-256-GCM for symmetric encryption
+ * Uses scrypt for key derivation and AES-256-GCM for authenticated encryption.
  */
 class EncryptedDatabase {
 public:
@@ -173,7 +170,6 @@ public:
         std::string salt;
         std::string created_at;
         std::string last_login;
-        std::string plain_password; // For testing/display purposes only - NOT stored in database
         std::map<std::string, std::string> metadata;
         
         // Convert to/from JSON
@@ -252,6 +248,17 @@ public:
      */
     bool changePassword(const std::string& username, const std::string& old_password, const std::string& new_password);
 
+    // Re-encrypt the complete database container under a new master password.
+    bool changeMasterPassword(const std::string& old_password, const std::string& new_password);
+
+    // Transaction support: prepare and authenticate the replacement without
+    // changing either the current file or the retained in-memory password.
+    bool prepareMasterPasswordChange(const std::string& old_password,
+                                     const std::string& new_password,
+                                     std::vector<uint8_t>& replacement) const;
+    bool completeMasterPasswordChange(const std::string& new_password);
+    const std::string& getDatabasePath() const noexcept { return database_path_; }
+
     /**
      * @brief Get database statistics
      * @return Map with database statistics
@@ -274,6 +281,9 @@ public:
      */
     bool importBackup(const std::string& backup_path, const std::string& backup_password);
 
+    // Generate a high-entropy printable key suitable as an offline backup key.
+    bool generateRecoveryKey(std::string& recovery_key);
+
     /**
      * @brief Hash password using SHA-256 (public for UI usage)
      * @param password Password to hash
@@ -292,77 +302,12 @@ public:
 
 private:
     std::string database_path_;
-    std::string master_password_;
-    
-    // Post-Quantum Cryptography keys
-    OQS_SIG* sphincs_signature_;
-    uint8_t* sphincs_public_key_;
-    uint8_t* sphincs_secret_key_;
-    
-    // AES encryption context
-    EVP_CIPHER_CTX* aes_ctx_;
-    uint8_t aes_key_[32];  // 256-bit AES key
-    uint8_t aes_iv_[16];   // 128-bit IV
-    
+    SecureMemory::SecureString master_password_;
+
     // In-memory database
     SimpleJSON database_json_;
     bool is_loaded_;
     bool is_modified_;
-
-    /**
-     * @brief Generate SPHINCS+ key pair
-     * @return true if successful, false otherwise
-     */
-    bool generateSPHINCSKeys();
-
-    /**
-     * @brief Initialize AES encryption
-     * @return true if successful, false otherwise
-     */
-    bool initializeAES();
-
-    /**
-     * @brief Derive encryption key from master password
-     * @param password Master password
-     * @param salt Salt for key derivation
-     * @param key Output buffer for derived key
-     * @return true if successful, false otherwise
-     */
-    bool deriveKeyFromPassword(const std::string& password, const uint8_t* salt, uint8_t* key);
-
-    /**
-     * @brief Encrypt data using AES-256-GCM
-     * @param plaintext Data to encrypt
-     * @param ciphertext Output encrypted data
-     * @param tag Output authentication tag
-     * @return true if successful, false otherwise
-     */
-    bool encryptData(const std::string& plaintext, std::string& ciphertext, std::string& tag);
-
-    /**
-     * @brief Decrypt data using AES-256-GCM
-     * @param ciphertext Encrypted data
-     * @param tag Authentication tag
-     * @param plaintext Output decrypted data
-     * @return true if successful, false otherwise
-     */
-    bool decryptData(const std::string& ciphertext, const std::string& tag, std::string& plaintext);
-
-    /**
-     * @brief Sign data using SPHINCS+
-     * @param data Data to sign
-     * @param signature Output signature
-     * @return true if successful, false otherwise
-     */
-    bool signData(const std::string& data, std::string& signature);
-
-    /**
-     * @brief Verify signature using SPHINCS+
-     * @param data Original data
-     * @param signature Signature to verify
-     * @return true if signature is valid, false otherwise
-     */
-    bool verifySignature(const std::string& data, const std::string& signature);
 
     /**
      * @brief Load database from encrypted file
@@ -376,12 +321,6 @@ private:
      */
     bool saveDatabase();
 
-    /**
-     * @brief Secure memory cleanup
-     * @param ptr Pointer to memory to clean
-     * @param size Size of memory to clean
-     */
-    void secureCleanup(void* ptr, size_t size);
 };
 
 #endif // ENCRYPTED_DATABASE_H

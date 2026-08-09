@@ -4,12 +4,18 @@
 #include <algorithm>
 #include <ctime>
 #include <chrono>
-#include <random>
+#include <array>
+#include <cstring>
+#include <filesystem>
+#include <cstdio>
+#include <openssl/rand.h>
 
 DatabaseManagerWindow::DatabaseManagerWindow(std::shared_ptr<EncryptedDatabase> database)
     : database_(database), show_window_(false), show_add_user_popup_(false), 
       show_edit_user_popup_(false), show_delete_confirmation_(false), 
-      show_passwords_(false), message_timer_(0.0f) {
+      show_export_backup_popup_(false), show_import_backup_popup_(false),
+      show_backup_password_(false), confirm_restore_(false),
+      show_passwords_(false), password_verified_(false), message_timer_(0.0f) {
     
     // Initialize buffers
     memset(search_buffer_, 0, sizeof(search_buffer_));
@@ -18,15 +24,17 @@ DatabaseManagerWindow::DatabaseManagerWindow(std::shared_ptr<EncryptedDatabase> 
     memset(new_website_, 0, sizeof(new_website_));
     memset(new_password_, 0, sizeof(new_password_));
     memset(confirm_password_, 0, sizeof(confirm_password_));
+    memset(verification_password_, 0, sizeof(verification_password_));
+    memset(backup_path_, 0, sizeof(backup_path_));
+    memset(backup_password_, 0, sizeof(backup_password_));
+    memset(backup_confirm_password_, 0, sizeof(backup_confirm_password_));
     
     // Load initial user list
     updateFilteredUsernames();
 }
 
 DatabaseManagerWindow::~DatabaseManagerWindow() {
-    // Secure cleanup of password fields
-    memset(new_password_, 0, sizeof(new_password_));
-    memset(confirm_password_, 0, sizeof(confirm_password_));
+    clearSensitiveUiState();
 }
 
 void DatabaseManagerWindow::render() {
@@ -54,10 +62,22 @@ void DatabaseManagerWindow::render() {
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("[EXPORT] Export Backup")) {
-                    // Export backup
+                    const auto now = std::chrono::system_clock::to_time_t(
+                        std::chrono::system_clock::now());
+                    const std::filesystem::path databasePath(database_->getDatabasePath());
+                    const std::filesystem::path suggested =
+                        std::filesystem::path("backups") /
+                        (databasePath.stem().string() + "-" + std::to_string(now) +
+                         ".pqcbak");
+                    std::snprintf(backup_path_, sizeof(backup_path_), "%s",
+                                  suggested.string().c_str());
+                    clearBackupSensitiveState();
+                    show_export_backup_popup_ = true;
                 }
                 if (ImGui::MenuItem("[IMPORT] Import Backup")) {
-                    // Import backup
+                    backup_path_[0] = '\0';
+                    clearBackupSensitiveState();
+                    show_import_backup_popup_ = true;
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("[LOCK] Change Master Password")) {
@@ -112,9 +132,13 @@ void DatabaseManagerWindow::render() {
         renderAddUserPopup();
         renderEditUserPopup();
         renderDeleteConfirmation();
+        renderBackupPopups();
         
     }
     ImGui::End();
+    if (!show_window_) {
+        clearSensitiveUiState();
+    }
 }
 
 void DatabaseManagerWindow::renderToolbar() {
@@ -159,6 +183,7 @@ void DatabaseManagerWindow::renderToolbar() {
         std::string password = generateRandomPassword(16);
         strcpy(new_password_, password.c_str());
         strcpy(confirm_password_, password.c_str());
+        SecureMemory::Cleanse(password);
         showSuccess("Secure password generated");
     }
 }
@@ -186,7 +211,8 @@ void DatabaseManagerWindow::renderUserList() {
         bool is_selected = (username == selected_username_);
         if (ImGui::Selectable(username.c_str(), is_selected)) {
             selected_username_ = username;
-            current_plain_password_.clear(); // Clear verified password when selecting different user
+            password_verified_ = false;
+            SecureMemory::Cleanse(verification_password_);
         }
         
         // Context menu
@@ -222,14 +248,7 @@ void DatabaseManagerWindow::renderUserDetails() {
         if (show_passwords_) {
             ImGui::Text("[HASH] Password Hash: %s", record.encrypted_password.c_str());
             
-            // Show plain password if available from current session
-            if (session_passwords_.find(selected_username_) != session_passwords_.end()) {
-                ImGui::Text("[PLAIN] Plain Password: %s", session_passwords_[selected_username_].c_str());
-            }
-            
-            if (!current_plain_password_.empty()) {
-                ImGui::Text("[VERIFIED] Verified Password: %s", current_plain_password_.c_str());
-            }
+            ImGui::TextDisabled("Plaintext passwords are not cached in memory.");
         } else {
             ImGui::Text("[PASS] Password: ••••••••");
         }
@@ -247,39 +266,28 @@ void DatabaseManagerWindow::renderUserDetails() {
         
         // Password verification section
         ImGui::Text("[VERIFY] Verify Password:");
-        static char password_input[256] = {0};
-        static bool password_verified = false;
-        
-        if (ImGui::InputText("Enter Password", password_input, sizeof(password_input), ImGuiInputTextFlags_Password)) {
-            password_verified = false;
+        if (ImGui::InputText("Enter Password", verification_password_,
+                             sizeof(verification_password_), ImGuiInputTextFlags_Password)) {
+            password_verified_ = false;
         }
         
         ImGui::SameLine();
         if (ImGui::Button("[CHECK] Verify")) {
-            std::string hashed_input;
-            if (database_->hashPassword(password_input, record.salt, hashed_input)) {
-                if (hashed_input == record.encrypted_password) {
-                    password_verified = true;
-                    current_plain_password_ = password_input;
-                    showSuccess("Password verified successfully!");
-                } else {
-                    password_verified = false;
-                    current_plain_password_.clear();
-                    showError("Password verification failed!");
-                }
+            SecureMemory::SecureString submittedPassword(verification_password_);
+            SecureMemory::Cleanse(verification_password_);
+            password_verified_ = !submittedPassword.empty() &&
+                database_->verifyCredentials(selected_username_, submittedPassword.get());
+            if (password_verified_) {
+                showSuccess("Password verified successfully!");
+            } else {
+                showError("Password verification failed!");
             }
         }
         
-        if (password_verified && !current_plain_password_.empty()) {
+        if (password_verified_) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
-            ImGui::Text("[OK] Verified Password: %s", current_plain_password_.c_str());
+            ImGui::Text("[OK] Password verified; plaintext was discarded.");
             ImGui::PopStyleColor();
-            
-            ImGui::SameLine();
-            if (ImGui::Button("[COPY] Copy Password")) {
-                ImGui::SetClipboardText(current_plain_password_.c_str());
-                showSuccess("Password copied to clipboard!");
-            }
         }
         
         ImGui::Separator();
@@ -333,6 +341,7 @@ void DatabaseManagerWindow::renderAddUserPopup() {
             std::string password = generateRandomPassword(16);
             strcpy(new_password_, password.c_str());
             strcpy(confirm_password_, password.c_str());
+            SecureMemory::Cleanse(password);
         }
         
         ImGui::Separator();
@@ -424,6 +433,127 @@ void DatabaseManagerWindow::renderDeleteConfirmation() {
     }
 }
 
+void DatabaseManagerWindow::renderBackupPopups() {
+    if (show_export_backup_popup_) {
+        ImGui::OpenPopup("Export Encrypted Backup");
+        show_export_backup_popup_ = false;
+    }
+    if (ImGui::BeginPopupModal("Export Encrypted Backup", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("The backup key is independent of the master password. "
+                           "Store it offline; the backup cannot be restored without it.");
+        if (!error_message_.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s",
+                               error_message_.c_str());
+        } else if (!success_message_.empty()) {
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s",
+                               success_message_.c_str());
+        }
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(520.0f);
+        ImGui::InputText("Backup path", backup_path_, sizeof(backup_path_));
+
+        const ImGuiInputTextFlags passwordFlags =
+            show_backup_password_ ? ImGuiInputTextFlags_None : ImGuiInputTextFlags_Password;
+        ImGui::SetNextItemWidth(360.0f);
+        ImGui::InputText("Backup key", backup_password_, sizeof(backup_password_), passwordFlags);
+        ImGui::SetNextItemWidth(360.0f);
+        ImGui::InputText("Confirm key", backup_confirm_password_,
+                         sizeof(backup_confirm_password_), passwordFlags);
+        ImGui::Checkbox("Show backup key", &show_backup_password_);
+
+        if (ImGui::Button("Generate 256-bit recovery key")) {
+            std::string generated;
+            if (database_->generateRecoveryKey(generated)) {
+                std::snprintf(backup_password_, sizeof(backup_password_), "%s",
+                              generated.c_str());
+                std::snprintf(backup_confirm_password_, sizeof(backup_confirm_password_), "%s",
+                              generated.c_str());
+                show_backup_password_ = true;
+                showSuccess("Recovery key generated. Save it before closing this dialog.");
+            } else {
+                showError("Could not generate a recovery key.");
+            }
+            SecureMemory::Cleanse(generated);
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Export", ImVec2(120, 0))) {
+            SecureMemory::SecureString submittedKey(backup_password_);
+            SecureMemory::SecureString confirmation(backup_confirm_password_);
+            SecureMemory::Cleanse(backup_password_);
+            SecureMemory::Cleanse(backup_confirm_password_);
+            if (backup_path_[0] == '\0' || submittedKey.size() < 12) {
+                showError("Choose a path and use a backup key of at least 12 characters.");
+            } else if (!submittedKey.equals(confirmation.get())) {
+                showError("Backup keys do not match.");
+            } else if (database_->exportBackup(backup_path_, submittedKey.get())) {
+                showSuccess("Encrypted backup exported successfully.");
+                clearBackupSensitiveState();
+                ImGui::CloseCurrentPopup();
+            } else {
+                showError("Backup export failed; an existing backup was not modified.");
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            clearBackupSensitiveState();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (show_import_backup_popup_) {
+        ImGui::OpenPopup("Restore Encrypted Backup");
+        show_import_backup_popup_ = false;
+    }
+    if (ImGui::BeginPopupModal("Restore Encrypted Backup", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Restore replaces the current credential database only after "
+                           "the complete backup has been authenticated and validated.");
+        if (!error_message_.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s",
+                               error_message_.c_str());
+        }
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(520.0f);
+        ImGui::InputText("Backup path", backup_path_, sizeof(backup_path_));
+        ImGui::SetNextItemWidth(360.0f);
+        ImGui::InputText("Backup key", backup_password_, sizeof(backup_password_),
+                         show_backup_password_ ? ImGuiInputTextFlags_None
+                                               : ImGuiInputTextFlags_Password);
+        ImGui::Checkbox("Show backup key", &show_backup_password_);
+        ImGui::Checkbox("I understand that current database records will be replaced",
+                        &confirm_restore_);
+
+        ImGui::Separator();
+        if (ImGui::Button("Authenticate and Restore", ImVec2(190, 0))) {
+            SecureMemory::SecureString submittedKey(backup_password_);
+            SecureMemory::Cleanse(backup_password_);
+            if (backup_path_[0] == '\0' || submittedKey.empty()) {
+                showError("Select a backup and enter its backup key.");
+            } else if (!confirm_restore_) {
+                showError("Confirm replacement of the current database first.");
+            } else if (database_->importBackup(backup_path_, submittedKey.get())) {
+                selected_username_.clear();
+                password_verified_ = false;
+                updateFilteredUsernames();
+                showSuccess("Backup authenticated and restored successfully.");
+                clearBackupSensitiveState();
+                ImGui::CloseCurrentPopup();
+            } else {
+                showError("Restore failed. The current database remains unchanged.");
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            clearBackupSensitiveState();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
 void DatabaseManagerWindow::updateFilteredUsernames() {
     filtered_usernames_.clear();
     
@@ -480,9 +610,6 @@ void DatabaseManagerWindow::addNewUser() {
         showSuccess("User created successfully");
         updateFilteredUsernames();
         
-        // Store plain password for current session display
-        session_passwords_[record.username] = new_password_;
-        
         clearInputFields();
     } else {
         showError("Failed to create user");
@@ -509,8 +636,8 @@ void DatabaseManagerWindow::clearInputFields() {
     memset(new_username_, 0, sizeof(new_username_));
     memset(new_email_, 0, sizeof(new_email_));
     memset(new_website_, 0, sizeof(new_website_));
-    memset(new_password_, 0, sizeof(new_password_));
-    memset(confirm_password_, 0, sizeof(confirm_password_));
+    SecureMemory::Cleanse(new_password_);
+    SecureMemory::Cleanse(confirm_password_);
 }
 
 bool DatabaseManagerWindow::validateInput() {
@@ -550,15 +677,47 @@ void DatabaseManagerWindow::showSuccess(const std::string& message) {
 }
 
 std::string DatabaseManagerWindow::generateRandomPassword(int length) {
-    const std::string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, chars.length() - 1);
-    
+    static constexpr char chars[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+    static constexpr std::size_t charCount = sizeof(chars) - 1;
+    const unsigned int acceptanceLimit = 256U - (256U % charCount);
+
     std::string password;
-    for (int i = 0; i < length; i++) {
-        password += chars[dis(gen)];
+    if (length <= 0) {
+        return password;
     }
-    
+    password.reserve(static_cast<std::size_t>(length));
+    while (password.size() < static_cast<std::size_t>(length)) {
+        unsigned char randomByte = 0;
+        if (RAND_bytes(&randomByte, 1) != 1) {
+            SecureMemory::Cleanse(password);
+            return {};
+        }
+        if (randomByte < acceptanceLimit) {
+            password.push_back(chars[randomByte % charCount]);
+        }
+    }
     return password;
+}
+
+void DatabaseManagerWindow::setVisible(bool show) {
+    show_window_ = show;
+    if (!show) {
+        clearSensitiveUiState();
+    }
+}
+
+void DatabaseManagerWindow::clearSensitiveUiState() {
+    SecureMemory::Cleanse(new_password_);
+    SecureMemory::Cleanse(confirm_password_);
+    SecureMemory::Cleanse(verification_password_);
+    clearBackupSensitiveState();
+    password_verified_ = false;
+}
+
+void DatabaseManagerWindow::clearBackupSensitiveState() {
+    SecureMemory::Cleanse(backup_password_);
+    SecureMemory::Cleanse(backup_confirm_password_);
+    show_backup_password_ = false;
+    confirm_restore_ = false;
 }

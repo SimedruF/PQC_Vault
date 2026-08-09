@@ -1,0 +1,91 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "linux-sanitized-debug",
+      "displayName": "Linux Debug + ASan + UBSan",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PQCWALLET_ENABLE_ASAN": "ON",
+        "PQCWALLET_ENABLE_UBSAN": "ON"
+      }
+    },
+    {
+      "name": "linux-sanitized-release",
+      "displayName": "Linux Release + ASan + UBSan",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PQCWALLET_ENABLE_ASAN": "ON",
+        "PQCWALLET_ENABLE_UBSAN": "ON"
+      }
+    },
+    {
+      "name": "linux-fuzz",
+      "displayName": "Linux Clang libFuzzer",
+      "inherits": "linux-base",
+      "environment": {
+        "CC": "clang",
+        "CXX": "clang++"
+      },
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "PQCWALLET_BUILD_FUZZERS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-sanitized-debug",
+      "configurePreset": "linux-sanitized-debug",
+      "jobs": 2
+    },
+    {
+      "name": "linux-sanitized-release",
+      "configurePreset": "linux-sanitized-release",
+      "jobs": 2
+    },
+    {
+      "name": "linux-fuzz",
+      "configurePreset": "linux-fuzz",
+      "targets": ["format_parser_fuzz"],
+      "jobs": 2
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-sanitized-debug",
+      "configurePreset": "linux-sanitized-debug",
+      "output": {"outputOnFailure": true},
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1:strict_string_checks=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "linux-sanitized-release",
+      "configurePreset": "linux-sanitized-release",
+      "output": {"outputOnFailure": true},
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1:strict_string_checks=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    }
+  ]
+}

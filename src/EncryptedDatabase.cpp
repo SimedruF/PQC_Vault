@@ -1,162 +1,439 @@
 #include "EncryptedDatabase.h"
+#include "AtomicFile.h"
+#include "FormatValidation.h"
+#include <algorithm>
+#include <array>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <limits>
+#include <memory>
 #include <sstream>
 #include <iomanip>
 #include <ctime>
 #include <chrono>
-#include <random>
-#include <openssl/kdf.h>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
-#include <openssl/sha.h>
-#include <cstring>
+
+namespace {
+
+constexpr std::array<uint8_t, 8> DATABASE_MAGIC = {'P', 'Q', 'C', 'D', 'B', '0', '0', '2'};
+constexpr std::array<uint8_t, 8> BACKUP_MAGIC = {'P', 'Q', 'C', 'B', 'K', 'P', '0', '1'};
+constexpr char LEGACY_DATABASE_HEADER[] = "PQCWALLET_DB_v1.0\n";
+constexpr uint32_t DATABASE_FORMAT_VERSION = 2;
+constexpr uint32_t BACKUP_FORMAT_VERSION = 1;
+constexpr uint32_t KDF_SCRYPT = 1;
+constexpr uint64_t SCRYPT_N = 32768;
+constexpr uint32_t SCRYPT_R = 8;
+constexpr uint32_t SCRYPT_P = 1;
+constexpr uint64_t SCRYPT_MAX_MEMORY = 128ULL * 1024ULL * 1024ULL;
+constexpr size_t KEY_SIZE = 32;
+constexpr size_t SALT_SIZE = 32;
+constexpr size_t NONCE_SIZE = 12;
+constexpr size_t TAG_SIZE = 16;
+constexpr size_t FIXED_HEADER_SIZE = 52;
+constexpr uint64_t MAX_DATABASE_FILE_SIZE = 1024ULL * 1024ULL * 1024ULL;
+constexpr uint64_t MAX_BACKUP_FILE_SIZE = 1024ULL * 1024ULL * 1024ULL;
+
+using CipherContext = std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)>;
+
+void AppendUint32(std::vector<uint8_t>& output, uint32_t value) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        output.push_back(static_cast<uint8_t>((value >> shift) & 0xffU));
+    }
+}
+
+void AppendUint64(std::vector<uint8_t>& output, uint64_t value) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        output.push_back(static_cast<uint8_t>((value >> shift) & 0xffU));
+    }
+}
+
+bool ReadUint32(const std::vector<uint8_t>& input, size_t& offset, uint32_t& value) {
+    if (offset > input.size() || input.size() - offset < sizeof(value)) {
+        return false;
+    }
+    value = 0;
+    for (size_t i = 0; i < sizeof(value); ++i) {
+        value = (value << 8U) | input[offset++];
+    }
+    return true;
+}
+
+bool ReadUint64(const std::vector<uint8_t>& input, size_t& offset, uint64_t& value) {
+    if (offset > input.size() || input.size() - offset < sizeof(value)) {
+        return false;
+    }
+    value = 0;
+    for (size_t i = 0; i < sizeof(value); ++i) {
+        value = (value << 8U) | input[offset++];
+    }
+    return true;
+}
+
+void Cleanse(std::vector<uint8_t>& data) {
+    if (!data.empty()) {
+        OPENSSL_cleanse(data.data(), data.size());
+    }
+}
+
+bool DeriveDatabaseKey(const std::string& password,
+                       const std::vector<uint8_t>& salt,
+                       uint64_t n,
+                       uint64_t r,
+                       uint64_t p,
+                       std::vector<uint8_t>& key) {
+    if (password.empty() || salt.size() != SALT_SIZE || n != SCRYPT_N ||
+        r != SCRYPT_R || p != SCRYPT_P) {
+        return false;
+    }
+
+    key.assign(KEY_SIZE, 0);
+    if (EVP_PBE_scrypt(password.data(), password.size(), salt.data(), salt.size(),
+                       n, r, p, SCRYPT_MAX_MEMORY, key.data(), key.size()) != 1) {
+        Cleanse(key);
+        key.clear();
+        return false;
+    }
+    return true;
+}
+
+std::vector<uint8_t> BuildAuthenticatedHeader(const std::array<uint8_t, 8>& magic,
+                                              uint32_t formatVersion,
+                                              uint64_t ciphertextSize,
+                                              const std::vector<uint8_t>& salt,
+                                              const std::vector<uint8_t>& nonce) {
+    std::vector<uint8_t> header;
+    header.reserve(FIXED_HEADER_SIZE + salt.size() + nonce.size());
+    header.insert(header.end(), magic.begin(), magic.end());
+    AppendUint32(header, formatVersion);
+    AppendUint32(header, KDF_SCRYPT);
+    AppendUint64(header, SCRYPT_N);
+    AppendUint32(header, SCRYPT_R);
+    AppendUint32(header, SCRYPT_P);
+    AppendUint32(header, static_cast<uint32_t>(salt.size()));
+    AppendUint32(header, static_cast<uint32_t>(nonce.size()));
+    AppendUint32(header, static_cast<uint32_t>(TAG_SIZE));
+    AppendUint64(header, ciphertextSize);
+    header.insert(header.end(), salt.begin(), salt.end());
+    header.insert(header.end(), nonce.begin(), nonce.end());
+    return header;
+}
+
+bool EncryptAuthenticatedPayload(const std::array<uint8_t, 8>& magic,
+                                 uint32_t formatVersion,
+                                 const std::string& password,
+                                 const std::string& plaintext,
+                                 std::vector<uint8_t>& output) {
+    if (plaintext.empty() || plaintext.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+
+    std::vector<uint8_t> salt(SALT_SIZE);
+    std::vector<uint8_t> nonce(NONCE_SIZE);
+    if (RAND_bytes(salt.data(), static_cast<int>(salt.size())) != 1 ||
+        RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) != 1) {
+        return false;
+    }
+
+    std::vector<uint8_t> key;
+    SecureMemory::ScopedCleanse keyGuard(key);
+    if (!DeriveDatabaseKey(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P, key)) {
+        return false;
+    }
+
+    std::vector<uint8_t> header =
+        BuildAuthenticatedHeader(magic, formatVersion, plaintext.size(), salt, nonce);
+    CipherContext context(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+    if (!context ||
+        EVP_EncryptInit_ex(context.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1 ||
+        EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_IVLEN,
+                            static_cast<int>(nonce.size()), nullptr) != 1 ||
+        EVP_EncryptInit_ex(context.get(), nullptr, nullptr, key.data(), nonce.data()) != 1) {
+        Cleanse(key);
+        return false;
+    }
+
+    int outputLength = 0;
+    if (EVP_EncryptUpdate(context.get(), nullptr, &outputLength, header.data(),
+                          static_cast<int>(header.size())) != 1) {
+        Cleanse(key);
+        return false;
+    }
+
+    std::vector<uint8_t> ciphertext(plaintext.size() + TAG_SIZE);
+    int ciphertextLength = 0;
+    if (EVP_EncryptUpdate(context.get(), ciphertext.data(), &outputLength,
+                          reinterpret_cast<const uint8_t*>(plaintext.data()),
+                          static_cast<int>(plaintext.size())) != 1) {
+        Cleanse(key);
+        return false;
+    }
+    ciphertextLength = outputLength;
+
+    if (EVP_EncryptFinal_ex(context.get(), ciphertext.data() + ciphertextLength,
+                            &outputLength) != 1) {
+        Cleanse(key);
+        return false;
+    }
+    ciphertextLength += outputLength;
+    ciphertext.resize(static_cast<size_t>(ciphertextLength));
+
+    std::vector<uint8_t> tag(TAG_SIZE);
+    if (EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_GET_TAG,
+                            static_cast<int>(tag.size()), tag.data()) != 1) {
+        Cleanse(key);
+        return false;
+    }
+    Cleanse(key);
+
+    output = std::move(header);
+    output.insert(output.end(), ciphertext.begin(), ciphertext.end());
+    output.insert(output.end(), tag.begin(), tag.end());
+    return true;
+}
+
+bool DecryptAuthenticatedPayload(const std::array<uint8_t, 8>& expectedMagic,
+                                 uint32_t expectedVersion,
+                                 const std::string& password,
+                                 const std::vector<uint8_t>& input,
+                                 std::string& plaintext) {
+    if (input.size() < FIXED_HEADER_SIZE + SALT_SIZE + NONCE_SIZE + TAG_SIZE ||
+        !std::equal(expectedMagic.begin(), expectedMagic.end(), input.begin())) {
+        return false;
+    }
+
+    size_t offset = expectedMagic.size();
+    uint32_t version = 0;
+    uint32_t kdf = 0;
+    uint64_t n = 0;
+    uint32_t r = 0;
+    uint32_t p = 0;
+    uint32_t saltSize = 0;
+    uint32_t nonceSize = 0;
+    uint32_t tagSize = 0;
+    uint64_t ciphertextSize = 0;
+    if (!ReadUint32(input, offset, version) || !ReadUint32(input, offset, kdf) ||
+        !ReadUint64(input, offset, n) || !ReadUint32(input, offset, r) ||
+        !ReadUint32(input, offset, p) || !ReadUint32(input, offset, saltSize) ||
+        !ReadUint32(input, offset, nonceSize) || !ReadUint32(input, offset, tagSize) ||
+        !ReadUint64(input, offset, ciphertextSize)) {
+        return false;
+    }
+
+    if (version != expectedVersion || kdf != KDF_SCRYPT ||
+        n != SCRYPT_N || r != SCRYPT_R || p != SCRYPT_P ||
+        saltSize != SALT_SIZE || nonceSize != NONCE_SIZE || tagSize != TAG_SIZE ||
+        ciphertextSize == 0 || ciphertextSize > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+
+    const uint64_t variableSize = static_cast<uint64_t>(saltSize) + nonceSize +
+                                  ciphertextSize + tagSize;
+    if (variableSize > input.size() - offset ||
+        offset + static_cast<size_t>(variableSize) != input.size()) {
+        return false;
+    }
+
+    std::vector<uint8_t> salt(input.begin() + static_cast<std::ptrdiff_t>(offset),
+                              input.begin() + static_cast<std::ptrdiff_t>(offset + saltSize));
+    offset += saltSize;
+    std::vector<uint8_t> nonce(input.begin() + static_cast<std::ptrdiff_t>(offset),
+                               input.begin() + static_cast<std::ptrdiff_t>(offset + nonceSize));
+    offset += nonceSize;
+    const size_t headerSize = offset;
+    std::vector<uint8_t> ciphertext(
+        input.begin() + static_cast<std::ptrdiff_t>(offset),
+        input.begin() + static_cast<std::ptrdiff_t>(offset + ciphertextSize));
+    offset += static_cast<size_t>(ciphertextSize);
+    std::vector<uint8_t> tag(input.begin() + static_cast<std::ptrdiff_t>(offset), input.end());
+
+    std::vector<uint8_t> key;
+    SecureMemory::ScopedCleanse keyGuard(key);
+    if (!DeriveDatabaseKey(password, salt, n, r, p, key)) {
+        return false;
+    }
+
+    CipherContext context(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+    if (!context ||
+        EVP_DecryptInit_ex(context.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1 ||
+        EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_IVLEN,
+                            static_cast<int>(nonce.size()), nullptr) != 1 ||
+        EVP_DecryptInit_ex(context.get(), nullptr, nullptr, key.data(), nonce.data()) != 1) {
+        Cleanse(key);
+        return false;
+    }
+
+    int outputLength = 0;
+    if (EVP_DecryptUpdate(context.get(), nullptr, &outputLength, input.data(),
+                          static_cast<int>(headerSize)) != 1) {
+        Cleanse(key);
+        return false;
+    }
+
+    std::vector<uint8_t> decrypted(ciphertext.size() + TAG_SIZE);
+    SecureMemory::ScopedCleanse decryptedGuard(decrypted);
+    int plaintextLength = 0;
+    if (EVP_DecryptUpdate(context.get(), decrypted.data(), &outputLength,
+                          ciphertext.data(), static_cast<int>(ciphertext.size())) != 1) {
+        Cleanse(key);
+        Cleanse(decrypted);
+        return false;
+    }
+    plaintextLength = outputLength;
+
+    if (EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_TAG,
+                            static_cast<int>(tag.size()), tag.data()) != 1 ||
+        EVP_DecryptFinal_ex(context.get(), decrypted.data() + plaintextLength,
+                            &outputLength) != 1) {
+        Cleanse(key);
+        Cleanse(decrypted);
+        return false;
+    }
+    Cleanse(key);
+    plaintextLength += outputLength;
+    plaintext.assign(reinterpret_cast<const char*>(decrypted.data()),
+                     static_cast<size_t>(plaintextLength));
+    Cleanse(decrypted);
+    return true;
+}
+
+bool EncryptDatabasePayload(const std::string& password,
+                            const std::string& plaintext,
+                            std::vector<uint8_t>& output) {
+    return EncryptAuthenticatedPayload(DATABASE_MAGIC, DATABASE_FORMAT_VERSION,
+                                       password, plaintext, output);
+}
+
+bool DecryptDatabasePayload(const std::string& password,
+                            const std::vector<uint8_t>& input,
+                            std::string& plaintext) {
+    return FormatValidation::ValidateDatabaseV2(input.data(), input.size()) &&
+           DecryptAuthenticatedPayload(DATABASE_MAGIC, DATABASE_FORMAT_VERSION,
+                                       password, input, plaintext);
+}
+
+bool EncryptBackupPayload(const std::string& password,
+                          const std::string& plaintext,
+                          std::vector<uint8_t>& output) {
+    return EncryptAuthenticatedPayload(BACKUP_MAGIC, BACKUP_FORMAT_VERSION,
+                                       password, plaintext, output);
+}
+
+bool DecryptBackupPayload(const std::string& password,
+                          const std::vector<uint8_t>& input,
+                          std::string& plaintext) {
+    return DecryptAuthenticatedPayload(BACKUP_MAGIC, BACKUP_FORMAT_VERSION,
+                                       password, input, plaintext);
+}
+
+bool ReadBackupFile(const std::filesystem::path& path, std::vector<uint8_t>& output) {
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error) || error) {
+        return false;
+    }
+    const uintmax_t rawSize = std::filesystem::file_size(path, error);
+    if (error || rawSize == 0 || rawSize > MAX_BACKUP_FILE_SIZE ||
+        rawSize > static_cast<uintmax_t>(std::numeric_limits<size_t>::max()) ||
+        rawSize > static_cast<uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
+        return false;
+    }
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return false;
+    }
+    output.resize(static_cast<size_t>(rawSize));
+    file.read(reinterpret_cast<char*>(output.data()),
+              static_cast<std::streamsize>(output.size()));
+    return file.good() ||
+           (file.eof() && file.gcount() == static_cast<std::streamsize>(output.size()));
+}
+
+void CleanseJson(SimpleJSON& json) {
+    for (auto& [key, value] : json.data) {
+        (void)key;
+        SecureMemory::Cleanse(value);
+    }
+    json.data.clear();
+}
+
+bool ValidateDatabaseJson(const SimpleJSON& json) {
+    if (!json.isMember("version") || json["version"] != "2.0" ||
+        !json.isMember("created_at") || json["created_at"].empty() ||
+        !json.isMember("algorithm") || json["algorithm"] != "scrypt/AES-256-GCM") {
+        return false;
+    }
+
+    for (const auto& [key, value] : json.data) {
+        if (key == "version" || key == "created_at" || key == "algorithm") {
+            continue;
+        }
+        if (key.rfind("user_", 0) != 0 || key.size() <= 5 || value.empty()) {
+            return false;
+        }
+        SimpleJSON record;
+        if (!record.parseFromString(value) || !record.isMember("username") ||
+            record["username"] != key.substr(5) || !record.isMember("email") ||
+            !record.isMember("website") || !record.isMember("encrypted_password") ||
+            record["encrypted_password"].empty() || !record.isMember("salt") ||
+            record["salt"].empty() || !record.isMember("created_at") ||
+            !record.isMember("last_login")) {
+            CleanseJson(record);
+            return false;
+        }
+        CleanseJson(record);
+    }
+    return true;
+}
+
+} // namespace
 
 EncryptedDatabase::EncryptedDatabase(const std::string& database_path, const std::string& master_password)
-    : database_path_(database_path), master_password_(master_password), 
-      sphincs_signature_(nullptr), sphincs_public_key_(nullptr), sphincs_secret_key_(nullptr),
-      aes_ctx_(nullptr), is_loaded_(false), is_modified_(false) {
-    
-    // Initialize OpenSSL
-    OpenSSL_add_all_algorithms();
-    
-    // Clear sensitive data
-    memset(aes_key_, 0, sizeof(aes_key_));
-    memset(aes_iv_, 0, sizeof(aes_iv_));
+    : database_path_(database_path), is_loaded_(false), is_modified_(false) {
+    master_password_.assign(master_password);
 }
 
 EncryptedDatabase::~EncryptedDatabase() {
-    // Secure cleanup
-    if (sphincs_signature_) {
-        OQS_SIG_free(sphincs_signature_);
-    }
-    if (sphincs_public_key_) {
-        secureCleanup(sphincs_public_key_, sphincs_signature_ ? sphincs_signature_->length_public_key : 0);
-        free(sphincs_public_key_);
-    }
-    if (sphincs_secret_key_) {
-        secureCleanup(sphincs_secret_key_, sphincs_signature_ ? sphincs_signature_->length_secret_key : 0);
-        free(sphincs_secret_key_);
-    }
-    if (aes_ctx_) {
-        EVP_CIPHER_CTX_free(aes_ctx_);
-    }
-    
-    // Clear sensitive data
-    secureCleanup(aes_key_, sizeof(aes_key_));
-    secureCleanup(aes_iv_, sizeof(aes_iv_));
+    CleanseJson(database_json_);
+    master_password_.clear();
 }
 
 bool EncryptedDatabase::initialize() {
-    std::cout << "[*] Initializing Encrypted Database with SPHINCS+ PQC..." << std::endl;
-    
-    // Generate SPHINCS+ keys
-    if (!generateSPHINCSKeys()) {
-        std::cerr << "[X] Failed to generate SPHINCS+ keys" << std::endl;
+    if (master_password_.empty()) {
+        std::cerr << "[X] Database master password cannot be empty" << std::endl;
         return false;
     }
-    
-    // Initialize AES encryption
-    if (!initializeAES()) {
-        std::cerr << "[X] Failed to initialize AES encryption" << std::endl;
-        return false;
-    }
-    
-    // Load existing database or create new one
-    if (!loadDatabase()) {
-        std::cout << "[NEW] Creating new encrypted database..." << std::endl;
-        // Create empty database structure
-        database_json_.data["version"] = "1.0";
+
+    const bool databaseExists = std::filesystem::exists(database_path_);
+    if (databaseExists) {
+        if (!loadDatabase()) {
+            std::cerr << "[X] Existing database could not be authenticated; it was not modified"
+                      << std::endl;
+            return false;
+        }
+
+        if (is_modified_ && !saveDatabase()) {
+            std::cerr << "[X] Failed to migrate legacy database" << std::endl;
+            return false;
+        }
+    } else {
+        std::cout << "[NEW] Creating encrypted database..." << std::endl;
+        database_json_.data["version"] = "2.0";
         database_json_.data["created_at"] = std::to_string(std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
-        database_json_.data["algorithm"] = "SPHINCS+/AES-256-GCM";
+        database_json_.data["algorithm"] = "scrypt/AES-256-GCM";
         is_loaded_ = true;
         is_modified_ = true;
-        
-        // Save the new database
+
         if (!saveDatabase()) {
             std::cerr << "[X] Failed to save new database" << std::endl;
             return false;
         }
     }
-    
+
     std::cout << "[OK] Encrypted Database initialized successfully!" << std::endl;
-    return true;
-}
-
-bool EncryptedDatabase::generateSPHINCSKeys() {
-    std::cout << "[KEY] Generating SPHINCS+ key pair..." << std::endl;
-    
-    // Initialize SPHINCS+ signature scheme
-    sphincs_signature_ = OQS_SIG_new(OQS_SIG_alg_sphincs_sha2_128f_simple);
-    if (!sphincs_signature_) {
-        std::cerr << "[X] Failed to initialize SPHINCS+ signature scheme" << std::endl;
-        return false;
-    }
-    
-    // Allocate memory for keys
-    sphincs_public_key_ = (uint8_t*)malloc(sphincs_signature_->length_public_key);
-    sphincs_secret_key_ = (uint8_t*)malloc(sphincs_signature_->length_secret_key);
-    
-    if (!sphincs_public_key_ || !sphincs_secret_key_) {
-        std::cerr << "[X] Failed to allocate memory for SPHINCS+ keys" << std::endl;
-        return false;
-    }
-    
-    // Generate key pair
-    if (OQS_SIG_keypair(sphincs_signature_, sphincs_public_key_, sphincs_secret_key_) != OQS_SUCCESS) {
-        std::cerr << "[X] Failed to generate SPHINCS+ key pair" << std::endl;
-        return false;
-    }
-    
-    std::cout << "[OK] SPHINCS+ keys generated successfully!" << std::endl;
-    std::cout << "   Public key size: " << sphincs_signature_->length_public_key << " bytes" << std::endl;
-    std::cout << "   Secret key size: " << sphincs_signature_->length_secret_key << " bytes" << std::endl;
-    
-    return true;
-}
-
-bool EncryptedDatabase::initializeAES() {
-    std::cout << "[HASH] Initializing AES-256-GCM encryption..." << std::endl;
-    
-    // Create AES context
-    aes_ctx_ = EVP_CIPHER_CTX_new();
-    if (!aes_ctx_) {
-        std::cerr << "[X] Failed to create AES context" << std::endl;
-        return false;
-    }
-    
-    // Generate salt for key derivation
-    uint8_t salt[32];
-    if (RAND_bytes(salt, sizeof(salt)) != 1) {
-        std::cerr << "[X] Failed to generate salt" << std::endl;
-        return false;
-    }
-    
-    // Derive AES key from master password
-    if (!deriveKeyFromPassword(master_password_, salt, aes_key_)) {
-        std::cerr << "[X] Failed to derive AES key from master password" << std::endl;
-        return false;
-    }
-    
-    // Generate IV
-    if (RAND_bytes(aes_iv_, sizeof(aes_iv_)) != 1) {
-        std::cerr << "[X] Failed to generate AES IV" << std::endl;
-        return false;
-    }
-    
-    std::cout << "[OK] AES-256-GCM encryption initialized successfully!" << std::endl;
-    return true;
-}
-
-bool EncryptedDatabase::deriveKeyFromPassword(const std::string& password, const uint8_t* salt, uint8_t* key) {
-    // Use PBKDF2 with SHA-256
-    if (PKCS5_PBKDF2_HMAC(password.c_str(), password.length(),
-                          salt, 32,
-                          100000, // 100k iterations
-                          EVP_sha256(),
-                          32, key) != 1) {
-        return false;
-    }
     return true;
 }
 
@@ -185,6 +462,8 @@ bool EncryptedDatabase::addUser(const UserRecord& record) {
     user_data["created_at"] = record.created_at;
     user_data["last_login"] = record.last_login;
     
+    const bool previousModifiedState = is_modified_;
+
     // Add to database
     database_json_.data[user_key] = user_data.toJsonString();
     
@@ -192,6 +471,8 @@ bool EncryptedDatabase::addUser(const UserRecord& record) {
     
     // Save database
     if (!saveDatabase()) {
+        database_json_.data.erase(user_key);
+        is_modified_ = previousModifiedState;
         std::cerr << "[X] Failed to save database after adding user" << std::endl;
         return false;
     }
@@ -237,44 +518,71 @@ bool EncryptedDatabase::verifyCredentials(const std::string& username, const std
         return false;
     }
     
-    // Compare with stored hash
-    return computed_hash == record.encrypted_password;
+    const bool matches = computed_hash.size() == record.encrypted_password.size() &&
+        (computed_hash.empty() ||
+         CRYPTO_memcmp(computed_hash.data(), record.encrypted_password.data(),
+                       computed_hash.size()) == 0);
+    SecureMemory::Cleanse(computed_hash);
+    return matches;
 }
 
 bool EncryptedDatabase::loadDatabase() {
-    std::cout << "[LOAD] Loading encrypted database..." << std::endl;
-    
+    std::error_code sizeError;
+    const uintmax_t rawSize = std::filesystem::file_size(database_path_, sizeError);
+    if (sizeError || rawSize == 0 || rawSize > MAX_DATABASE_FILE_SIZE ||
+        rawSize > static_cast<uintmax_t>(std::numeric_limits<size_t>::max()) ||
+        rawSize > static_cast<uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
+        std::cerr << "[X] Database file size is invalid" << std::endl;
+        return false;
+    }
+
     std::ifstream file(database_path_, std::ios::binary);
     if (!file.is_open()) {
-        std::cout << "[NEW] Database file doesn't exist, will create new one" << std::endl;
         return false;
     }
-    
-    // Read the entire file
-    std::string file_content((std::istreambuf_iterator<char>(file)),
-                            std::istreambuf_iterator<char>());
+
+    std::vector<uint8_t> fileContent(static_cast<size_t>(rawSize));
+    file.read(reinterpret_cast<char*>(fileContent.data()),
+              static_cast<std::streamsize>(fileContent.size()));
+    if (!file || file.gcount() != static_cast<std::streamsize>(fileContent.size())) {
+        return false;
+    }
     file.close();
-    
-    if (file_content.empty()) {
-        std::cout << "[NEW] Empty database file, will create new one" << std::endl;
+
+    std::string jsonData;
+    if (fileContent.size() >= DATABASE_MAGIC.size() &&
+        std::equal(DATABASE_MAGIC.begin(), DATABASE_MAGIC.end(), fileContent.begin())) {
+        if (!DecryptDatabasePayload(master_password_.get(), fileContent, jsonData)) {
+            std::cerr << "[X] Database authentication failed: wrong password or modified data"
+                      << std::endl;
+            return false;
+        }
+        is_modified_ = false;
+    } else {
+        const size_t legacyHeaderSize = sizeof(LEGACY_DATABASE_HEADER) - 1;
+        if (fileContent.size() <= legacyHeaderSize ||
+            !std::equal(std::begin(LEGACY_DATABASE_HEADER),
+                        std::end(LEGACY_DATABASE_HEADER) - 1, fileContent.begin())) {
+            std::cerr << "[X] Unknown database format" << std::endl;
+            return false;
+        }
+
+        jsonData.assign(reinterpret_cast<const char*>(fileContent.data() + legacyHeaderSize),
+                        fileContent.size() - legacyHeaderSize);
+        is_modified_ = true;
+        std::cout << "[MIGRATE] Loaded legacy plaintext database; converting to PQCDB002"
+                  << std::endl;
+    }
+
+    if (!database_json_.parseFromString(jsonData)) {
+        OPENSSL_cleanse(jsonData.data(), jsonData.size());
+        std::cerr << "[X] Decrypted database payload is invalid" << std::endl;
         return false;
     }
-    
-    // Check for our header
-    if (file_content.substr(0, 18) != "PQCWALLET_DB_v1.0\n") {
-        std::cout << "[NEW] Invalid database format, will create new one" << std::endl;
-        return false;
-    }
-    
-    // Extract JSON data (simplified for testing)
-    std::string json_data = file_content.substr(18);
-    
-    // Parse JSON data back into database_json_
-    if (!database_json_.parseFromString(json_data)) {
-        std::cout << "[NEW] Failed to parse database, will create new one" << std::endl;
-        return false;
-    }
-    
+
+    OPENSSL_cleanse(jsonData.data(), jsonData.size());
+    database_json_.data["version"] = "2.0";
+    database_json_.data["algorithm"] = "scrypt/AES-256-GCM";
     std::cout << "[OK] Database loaded successfully" << std::endl;
     is_loaded_ = true;
     return true;
@@ -285,122 +593,44 @@ bool EncryptedDatabase::saveDatabase() {
         return true;
     }
     
-    std::cout << "[SAVE] Saving encrypted database..." << std::endl;
-    
-    // Convert database to JSON string
-    std::string json_data = database_json_.toJsonString();
-    
-    // For now, we'll save the JSON directly for testing
-    // In a real implementation, we'd:
-    // 1. Sign the data with SPHINCS+
-    // 2. Encrypt the data with AES-256-GCM
-    // 3. Store signature + auth_tag + encrypted_data
-    
-    // Save to file (simplified for testing)
-    std::ofstream file(database_path_, std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "[X] Failed to open database file for writing" << std::endl;
+    std::string jsonData = database_json_.toJsonString();
+    std::vector<uint8_t> encryptedData;
+    if (!EncryptDatabasePayload(master_password_.get(), jsonData, encryptedData)) {
+        OPENSSL_cleanse(jsonData.data(), jsonData.size());
+        std::cerr << "[X] Failed to encrypt database" << std::endl;
         return false;
     }
-    
-    // Write a header to indicate this is our format
-    file << "PQCWALLET_DB_v1.0\n";
-    file << json_data;
-    file.close();
-    
+    OPENSSL_cleanse(jsonData.data(), jsonData.size());
+
+    if (!AtomicFile::Write(database_path_, encryptedData)) {
+        std::cerr << "[X] Failed to atomically write encrypted database" << std::endl;
+        return false;
+    }
+
     is_modified_ = false;
-    std::cout << "[OK] Database saved successfully" << std::endl;
-    return true;
-}
-
-bool EncryptedDatabase::signData(const std::string& data, std::string& signature) {
-    if (!sphincs_signature_ || !sphincs_secret_key_) {
-        return false;
-    }
-    
-    size_t signature_len = sphincs_signature_->length_signature;
-    uint8_t* sig_buffer = (uint8_t*)malloc(signature_len);
-    if (!sig_buffer) {
-        return false;
-    }
-    
-    if (OQS_SIG_sign(sphincs_signature_, sig_buffer, &signature_len,
-                     (const uint8_t*)data.c_str(), data.length(),
-                     sphincs_secret_key_) != OQS_SUCCESS) {
-        free(sig_buffer);
-        return false;
-    }
-    
-    signature = std::string((char*)sig_buffer, signature_len);
-    free(sig_buffer);
-    return true;
-}
-
-bool EncryptedDatabase::encryptData(const std::string& plaintext, std::string& ciphertext, std::string& tag) {
-    if (!aes_ctx_) {
-        return false;
-    }
-    
-    // Initialize encryption
-    if (EVP_EncryptInit_ex(aes_ctx_, EVP_aes_256_gcm(), nullptr, aes_key_, aes_iv_) != 1) {
-        return false;
-    }
-    
-    // Encrypt data
-    std::vector<uint8_t> encrypted(plaintext.length() + 16); // Extra space for GCM
-    int len = 0;
-    int ciphertext_len = 0;
-    
-    if (EVP_EncryptUpdate(aes_ctx_, encrypted.data(), &len,
-                         (const uint8_t*)plaintext.c_str(), plaintext.length()) != 1) {
-        return false;
-    }
-    ciphertext_len = len;
-    
-    if (EVP_EncryptFinal_ex(aes_ctx_, encrypted.data() + len, &len) != 1) {
-        return false;
-    }
-    ciphertext_len += len;
-    
-    // Get authentication tag
-    uint8_t auth_tag[16];
-    if (EVP_CIPHER_CTX_ctrl(aes_ctx_, EVP_CTRL_GCM_GET_TAG, 16, auth_tag) != 1) {
-        return false;
-    }
-    
-    ciphertext = std::string((char*)encrypted.data(), ciphertext_len);
-    tag = std::string((char*)auth_tag, 16);
-    
+    std::cout << "[OK] Database saved as PQCDB002 (scrypt + AES-256-GCM)" << std::endl;
     return true;
 }
 
 bool EncryptedDatabase::hashPassword(const std::string& password, const std::string& salt, std::string& hash) {
-    // Use SHA-256 for password hashing (in a real implementation, use Argon2)
-    uint8_t hash_buffer[SHA256_DIGEST_LENGTH];
-    SHA256_CTX sha256;
-    
-    if (SHA256_Init(&sha256) != 1) {
+    // Kept for compatibility with existing credential records.
+    std::string input = password + salt;
+    std::array<uint8_t, 32> hashBuffer{};
+    unsigned int hashLength = 0;
+    if (EVP_Digest(input.data(), input.size(), hashBuffer.data(), &hashLength,
+                   EVP_sha256(), nullptr) != 1 || hashLength != hashBuffer.size()) {
+        OPENSSL_cleanse(input.data(), input.size());
+        OPENSSL_cleanse(hashBuffer.data(), hashBuffer.size());
         return false;
     }
+    OPENSSL_cleanse(input.data(), input.size());
     
-    if (SHA256_Update(&sha256, password.c_str(), password.length()) != 1) {
-        return false;
-    }
-    
-    if (SHA256_Update(&sha256, salt.c_str(), salt.length()) != 1) {
-        return false;
-    }
-    
-    if (SHA256_Final(hash_buffer, &sha256) != 1) {
-        return false;
-    }
-    
-    // Convert to hex string
     std::stringstream ss;
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash_buffer[i];
+    for (uint8_t byte : hashBuffer) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte);
     }
     hash = ss.str();
+    OPENSSL_cleanse(hashBuffer.data(), hashBuffer.size());
     
     return true;
 }
@@ -408,6 +638,7 @@ bool EncryptedDatabase::hashPassword(const std::string& password, const std::str
 bool EncryptedDatabase::generateSalt(std::string& salt) {
     uint8_t salt_buffer[32];
     if (RAND_bytes(salt_buffer, sizeof(salt_buffer)) != 1) {
+        OPENSSL_cleanse(salt_buffer, sizeof(salt_buffer));
         return false;
     }
     
@@ -416,8 +647,27 @@ bool EncryptedDatabase::generateSalt(std::string& salt) {
         ss << std::hex << std::setw(2) << std::setfill('0') << (int)salt_buffer[i];
     }
     salt = ss.str();
+    OPENSSL_cleanse(salt_buffer, sizeof(salt_buffer));
     
     return true;
+}
+
+bool EncryptedDatabase::generateRecoveryKey(std::string& recovery_key) {
+    std::array<uint8_t, 32> randomBytes{};
+    if (RAND_bytes(randomBytes.data(), static_cast<int>(randomBytes.size())) != 1) {
+        SecureMemory::Cleanse(randomBytes.data(), randomBytes.size());
+        return false;
+    }
+
+    static constexpr char HEX[] = "0123456789abcdef";
+    recovery_key.assign("PQC-RK1-");
+    recovery_key.reserve(72);
+    for (const uint8_t value : randomBytes) {
+        recovery_key.push_back(HEX[value >> 4U]);
+        recovery_key.push_back(HEX[value & 0x0fU]);
+    }
+    SecureMemory::Cleanse(randomBytes.data(), randomBytes.size());
+    return recovery_key.size() == 72;
 }
 
 std::vector<std::string> EncryptedDatabase::getAllUsernames() {
@@ -442,7 +692,7 @@ std::map<std::string, std::string> EncryptedDatabase::getStatistics() {
     
     stats["Total Users"] = std::to_string(getAllUsernames().size());
     stats["Database Path"] = database_path_;
-    stats["Encryption Algorithm"] = "SPHINCS+/AES-256-GCM";
+    stats["Encryption Algorithm"] = "scrypt/AES-256-GCM";
     stats["Status"] = is_loaded_ ? "Loaded" : "Not Loaded";
     stats["Modified"] = is_modified_ ? "Yes" : "No";
     
@@ -461,6 +711,9 @@ bool EncryptedDatabase::updateUser(const std::string& username, const UserRecord
         return false;
     }
     
+    const std::string previousRecord = database_json_.data[user_key];
+    const bool previousModifiedState = is_modified_;
+
     // Update user record
     SimpleJSON user_data = record.toJson();
     database_json_.data[user_key] = user_data.toJsonString();
@@ -469,6 +722,8 @@ bool EncryptedDatabase::updateUser(const std::string& username, const UserRecord
     
     // Save database
     if (!saveDatabase()) {
+        database_json_.data[user_key] = previousRecord;
+        is_modified_ = previousModifiedState;
         std::cerr << "[X] Failed to save database after updating user" << std::endl;
         return false;
     }
@@ -489,13 +744,15 @@ bool EncryptedDatabase::deleteUser(const std::string& username) {
         return false;
     }
     
-    // Remove user from database
-    database_json_.data.erase(user_key);
+    const bool previousModifiedState = is_modified_;
+    auto removedRecord = database_json_.data.extract(user_key);
     
     is_modified_ = true;
     
     // Save database
     if (!saveDatabase()) {
+        database_json_.data.insert(std::move(removedRecord));
+        is_modified_ = previousModifiedState;
         std::cerr << "[X] Failed to save database after deleting user" << std::endl;
         return false;
     }
@@ -505,15 +762,132 @@ bool EncryptedDatabase::deleteUser(const std::string& username) {
 }
 
 bool EncryptedDatabase::exportBackup(const std::string& backup_path, const std::string& backup_password) {
-    // Implementation for backup export
-    std::cout << "📤 Exporting backup to: " << backup_path << std::endl;
-    return true; // Placeholder
+    if (!is_loaded_ || backup_path.empty() || backup_password.empty()) {
+        return false;
+    }
+
+    std::error_code pathError;
+    const auto databaseAbsolute =
+        std::filesystem::absolute(database_path_, pathError).lexically_normal();
+    if (pathError) {
+        return false;
+    }
+    const auto backupAbsolute =
+        std::filesystem::absolute(backup_path, pathError).lexically_normal();
+    if (pathError || databaseAbsolute == backupAbsolute) {
+        std::cerr << "[X] Backup path must differ from the live database path" << std::endl;
+        return false;
+    }
+
+    SimpleJSON envelope;
+    envelope["backup_version"] = "1";
+    envelope["created_at"] = std::to_string(
+        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+    std::string databasePayload = database_json_.toJsonString();
+    envelope["database_payload"] = databasePayload;
+
+    std::string plaintext = envelope.toJsonString();
+    SecureMemory::Cleanse(databasePayload);
+    std::vector<uint8_t> encryptedBackup;
+    std::string verifiedPlaintext;
+    const bool prepared = EncryptBackupPayload(backup_password, plaintext, encryptedBackup) &&
+                          DecryptBackupPayload(backup_password, encryptedBackup,
+                                               verifiedPlaintext) &&
+                          verifiedPlaintext == plaintext;
+    SecureMemory::Cleanse(plaintext);
+    SecureMemory::Cleanse(verifiedPlaintext);
+    CleanseJson(envelope);
+    if (!prepared || !AtomicFile::Write(backupAbsolute, encryptedBackup)) {
+        std::cerr << "[X] Failed to create authenticated backup" << std::endl;
+        return false;
+    }
+
+    std::cout << "[OK] Database backup exported as PQCBKP01: " << backupAbsolute
+              << std::endl;
+    return true;
 }
 
 bool EncryptedDatabase::importBackup(const std::string& backup_path, const std::string& backup_password) {
-    // Implementation for backup import
-    std::cout << "📥 Importing backup from: " << backup_path << std::endl;
-    return true; // Placeholder
+    if (!is_loaded_ || backup_path.empty() || backup_password.empty()) {
+        return false;
+    }
+
+    std::error_code pathError;
+    const auto databaseAbsolute =
+        std::filesystem::absolute(database_path_, pathError).lexically_normal();
+    if (pathError) {
+        return false;
+    }
+    const auto backupAbsolute =
+        std::filesystem::absolute(backup_path, pathError).lexically_normal();
+    if (pathError || databaseAbsolute == backupAbsolute) {
+        return false;
+    }
+
+    std::vector<uint8_t> encryptedBackup;
+    std::string envelopeText;
+    if (!ReadBackupFile(backupAbsolute, encryptedBackup) ||
+        !DecryptBackupPayload(backup_password, encryptedBackup, envelopeText)) {
+        SecureMemory::Cleanse(envelopeText);
+        std::cerr << "[X] Backup authentication failed" << std::endl;
+        return false;
+    }
+
+    SimpleJSON envelope;
+    const bool envelopeParsed = envelope.parseFromString(envelopeText);
+    std::string canonicalEnvelope = envelopeParsed ? envelope.toJsonString() : std::string();
+    if (!envelopeParsed || envelope.data.size() != 3 || canonicalEnvelope != envelopeText ||
+        !envelope.isMember("backup_version") || envelope["backup_version"] != "1" ||
+        !envelope.isMember("created_at") || envelope["created_at"].empty() ||
+        !envelope.isMember("database_payload") || envelope["database_payload"].empty()) {
+        SecureMemory::Cleanse(envelopeText);
+        SecureMemory::Cleanse(canonicalEnvelope);
+        CleanseJson(envelope);
+        return false;
+    }
+    SecureMemory::Cleanse(envelopeText);
+    SecureMemory::Cleanse(canonicalEnvelope);
+
+    std::string databasePayload = envelope["database_payload"];
+    CleanseJson(envelope);
+    SimpleJSON importedDatabase;
+    const bool databaseParsed = importedDatabase.parseFromString(databasePayload);
+    std::string normalizedPayload =
+        databaseParsed ? importedDatabase.toJsonString() : std::string();
+    if (!databaseParsed || normalizedPayload != databasePayload ||
+        !ValidateDatabaseJson(importedDatabase)) {
+        SecureMemory::Cleanse(databasePayload);
+        SecureMemory::Cleanse(normalizedPayload);
+        CleanseJson(importedDatabase);
+        std::cerr << "[X] Authenticated backup contains an invalid database" << std::endl;
+        return false;
+    }
+
+    // Re-encrypt under the current session master password and verify the exact
+    // replacement before touching either disk or the current in-memory state.
+    SecureMemory::Cleanse(databasePayload);
+    databasePayload.swap(normalizedPayload);
+    SecureMemory::Cleanse(normalizedPayload);
+    std::vector<uint8_t> replacement;
+    std::string verifiedPayload;
+    const bool replacementValid =
+        EncryptDatabasePayload(master_password_.get(), databasePayload, replacement) &&
+        DecryptDatabasePayload(master_password_.get(), replacement, verifiedPayload) &&
+        verifiedPayload == databasePayload;
+    SecureMemory::Cleanse(databasePayload);
+    SecureMemory::Cleanse(verifiedPayload);
+    if (!replacementValid || !AtomicFile::Write(databaseAbsolute, replacement)) {
+        CleanseJson(importedDatabase);
+        std::cerr << "[X] Backup was valid, but database replacement failed" << std::endl;
+        return false;
+    }
+
+    CleanseJson(database_json_);
+    database_json_.data.swap(importedDatabase.data);
+    CleanseJson(importedDatabase);
+    is_modified_ = false;
+    std::cout << "[OK] Database restored from authenticated PQCBKP01 backup" << std::endl;
+    return true;
 }
 
 bool EncryptedDatabase::changePassword(const std::string& username, const std::string& old_password, const std::string& new_password) {
@@ -547,10 +921,49 @@ bool EncryptedDatabase::changePassword(const std::string& username, const std::s
     return updateUser(username, record);
 }
 
-void EncryptedDatabase::secureCleanup(void* ptr, size_t size) {
-    if (ptr) {
-        memset(ptr, 0, size);
+bool EncryptedDatabase::changeMasterPassword(const std::string& old_password,
+                                             const std::string& new_password) {
+    std::vector<uint8_t> replacement;
+    if (!prepareMasterPasswordChange(old_password, new_password, replacement)) {
+        return false;
     }
+
+    if (!AtomicFile::Write(database_path_, replacement)) {
+        return false;
+    }
+    return completeMasterPasswordChange(new_password);
+}
+
+bool EncryptedDatabase::prepareMasterPasswordChange(const std::string& old_password,
+                                                    const std::string& new_password,
+                                                    std::vector<uint8_t>& replacement) const {
+    if (!is_loaded_ || new_password.empty() ||
+        old_password.size() != master_password_.size() ||
+        CRYPTO_memcmp(old_password.data(), master_password_.get().data(),
+                      master_password_.size()) != 0) {
+        return false;
+    }
+
+    std::string plaintext = database_json_.toJsonString();
+    std::string verifiedPlaintext;
+    if (!EncryptDatabasePayload(new_password, plaintext, replacement) ||
+        !DecryptDatabasePayload(new_password, replacement, verifiedPlaintext) ||
+        verifiedPlaintext != plaintext) {
+        SecureMemory::Cleanse(plaintext);
+        SecureMemory::Cleanse(verifiedPlaintext);
+        return false;
+    }
+    SecureMemory::Cleanse(plaintext);
+    SecureMemory::Cleanse(verifiedPlaintext);
+    return true;
+}
+
+bool EncryptedDatabase::completeMasterPasswordChange(const std::string& new_password) {
+    if (!is_loaded_ || new_password.empty() || !master_password_.assign(new_password)) {
+        return false;
+    }
+    is_modified_ = false;
+    return true;
 }
 
 // UserRecord methods

@@ -4,10 +4,31 @@ project(PQCWallet)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(PQCWALLET_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(PQCWALLET_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(PQCWALLET_BUILD_FUZZERS "Build libFuzzer security targets" OFF)
+
+if(PQCWALLET_ENABLE_ASAN OR PQCWALLET_ENABLE_UBSAN)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "ASan/UBSan require GCC or Clang in this project")
+    endif()
+
+    set(PQCWALLET_SANITIZER_FLAGS)
+    if(PQCWALLET_ENABLE_ASAN)
+        list(APPEND PQCWALLET_SANITIZER_FLAGS -fsanitize=address)
+    endif()
+    if(PQCWALLET_ENABLE_UBSAN)
+        list(APPEND PQCWALLET_SANITIZER_FLAGS -fsanitize=undefined)
+    endif()
+    add_compile_options(${PQCWALLET_SANITIZER_FLAGS} -fno-omit-frame-pointer)
+    add_link_options(${PQCWALLET_SANITIZER_FLAGS})
+endif()
+
 # Find packages
 find_package(OpenGL REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(Threads REQUIRED)
 
 # Find liboqs - try different methods for cross-platform compatibility
 if(WIN32)
@@ -81,6 +102,10 @@ set(IMGUI_FILE_DIALOG_SOURCES
 # Source files
 set(SOURCES
     src/main.cpp
+    src/FileDropQueue.cpp
+    src/AtomicFile.cpp
+    src/PathSecurity.cpp
+    src/TransactionalFileBatch.cpp
     src/LoginWindow.cpp
     src/WalletWindow.cpp
     src/PasswordManager.cpp
@@ -90,6 +115,7 @@ set(SOURCES
     src/FontManager.cpp
     src/Settings.cpp
     src/EncryptedDatabase.cpp
+    src/FormatValidation.cpp
     src/DatabaseManagerWindow.cpp
     ${IMGUI_SOURCES}
     ${IMGUI_FILE_DIALOG_SOURCES}
@@ -98,33 +124,6 @@ set(SOURCES
 # Create executable
 add_executable(${PROJECT_NAME} ${SOURCES})
 
-# Create test executable for encrypted database
-add_executable(test_encrypted_database 
-    test_encrypted_database.cpp
-    src/EncryptedDatabase.cpp
-)
-
-# Include directories for test
-target_include_directories(test_encrypted_database PRIVATE
-    ${OQS_INCLUDE_DIRS}
-    src
-)
-
-# Link libraries for test
-target_link_libraries(test_encrypted_database 
-    ${OQS_LIBRARIES}
-    OpenSSL::SSL
-    OpenSSL::Crypto
-)
-
-# Platform-specific libraries for test
-if(WIN32)
-    target_link_libraries(test_encrypted_database 
-        ws2_32
-        crypt32
-        advapi32
-    )
-endif()
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -187,4 +186,227 @@ elseif(WIN32)
     target_compile_options(${PROJECT_NAME} PRIVATE /W3)
     # Enable UTF-8 support
     target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
+endif()
+
+include(CTest)
+
+if(BUILD_TESTING)
+    add_executable(crypto_archive_security_test
+        test_files/crypto_archive_security_test.cpp
+        src/AtomicFile.cpp
+        src/FormatValidation.cpp
+        src/PathSecurity.cpp
+        src/CryptoArchive.cpp
+    )
+
+    target_include_directories(crypto_archive_security_test PRIVATE src)
+    target_link_libraries(crypto_archive_security_test PRIVATE OpenSSL::Crypto)
+
+    if(UNIX)
+        target_compile_options(crypto_archive_security_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(crypto_archive_security_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME crypto_archive_security COMMAND crypto_archive_security_test)
+
+    add_executable(encrypted_database_security_test
+        test_files/encrypted_database_security_test.cpp
+        src/AtomicFile.cpp
+        src/FormatValidation.cpp
+        src/EncryptedDatabase.cpp
+    )
+
+    target_include_directories(encrypted_database_security_test PRIVATE src)
+    target_link_libraries(encrypted_database_security_test PRIVATE OpenSSL::Crypto)
+
+    if(UNIX)
+        target_compile_options(encrypted_database_security_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(encrypted_database_security_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME encrypted_database_security COMMAND encrypted_database_security_test)
+
+    add_executable(password_manager_gcm_test
+        test_files/password_manager_gcm_test.cpp
+        src/AtomicFile.cpp
+        src/FormatValidation.cpp
+        src/PathSecurity.cpp
+        src/TransactionalFileBatch.cpp
+        src/PasswordManager.cpp
+        src/CryptoArchive.cpp
+        src/EncryptedDatabase.cpp
+    )
+
+    target_include_directories(password_manager_gcm_test PRIVATE src ${OQS_INCLUDE_DIRS})
+    target_link_libraries(password_manager_gcm_test PRIVATE ${OQS_LIBRARIES} OpenSSL::Crypto)
+
+    if(UNIX)
+        target_compile_options(password_manager_gcm_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(password_manager_gcm_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME password_manager_gcm COMMAND password_manager_gcm_test)
+
+    add_executable(secure_memory_test
+        test_files/secure_memory_test.cpp
+    )
+
+    target_include_directories(secure_memory_test PRIVATE src)
+    target_link_libraries(secure_memory_test PRIVATE OpenSSL::Crypto)
+
+    if(UNIX)
+        target_compile_options(secure_memory_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(secure_memory_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME secure_memory COMMAND secure_memory_test)
+
+    add_executable(atomic_file_integrity_test
+        test_files/atomic_file_integrity_test.cpp
+        src/AtomicFile.cpp
+    )
+
+    target_include_directories(atomic_file_integrity_test PRIVATE src)
+
+    if(UNIX)
+        target_compile_options(atomic_file_integrity_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(atomic_file_integrity_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME atomic_file_integrity COMMAND atomic_file_integrity_test)
+
+    add_executable(master_password_transaction_test
+        test_files/master_password_transaction_test.cpp
+        src/AtomicFile.cpp
+        src/FormatValidation.cpp
+        src/PathSecurity.cpp
+        src/TransactionalFileBatch.cpp
+        src/PasswordManager.cpp
+        src/CryptoArchive.cpp
+        src/EncryptedDatabase.cpp
+    )
+
+    target_include_directories(master_password_transaction_test PRIVATE src ${OQS_INCLUDE_DIRS})
+    target_link_libraries(master_password_transaction_test PRIVATE
+        ${OQS_LIBRARIES}
+        OpenSSL::Crypto
+    )
+
+    if(UNIX)
+        target_compile_options(master_password_transaction_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(master_password_transaction_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME master_password_transaction COMMAND master_password_transaction_test)
+
+    add_executable(database_backup_security_test
+        test_files/database_backup_security_test.cpp
+        src/AtomicFile.cpp
+        src/FormatValidation.cpp
+        src/EncryptedDatabase.cpp
+    )
+
+    target_include_directories(database_backup_security_test PRIVATE src)
+    target_link_libraries(database_backup_security_test PRIVATE OpenSSL::Crypto)
+
+    if(UNIX)
+        target_compile_options(database_backup_security_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(database_backup_security_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME database_backup_security COMMAND database_backup_security_test)
+
+    add_executable(path_validation_security_test
+        test_files/path_validation_security_test.cpp
+        src/AtomicFile.cpp
+        src/FormatValidation.cpp
+        src/PathSecurity.cpp
+        src/CryptoArchive.cpp
+    )
+
+    target_include_directories(path_validation_security_test PRIVATE src)
+    target_link_libraries(path_validation_security_test PRIVATE OpenSSL::Crypto)
+
+    if(UNIX)
+        target_compile_options(path_validation_security_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(path_validation_security_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME path_validation_security COMMAND path_validation_security_test)
+
+    add_executable(archive_transaction_test
+        test_files/archive_transaction_test.cpp
+        src/AtomicFile.cpp
+        src/FormatValidation.cpp
+        src/PathSecurity.cpp
+        src/CryptoArchive.cpp
+    )
+
+    target_include_directories(archive_transaction_test PRIVATE src)
+    target_link_libraries(archive_transaction_test PRIVATE OpenSSL::Crypto Threads::Threads)
+
+    if(UNIX)
+        target_compile_options(archive_transaction_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(archive_transaction_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME archive_transaction COMMAND archive_transaction_test)
+
+    add_executable(format_validation_security_test
+        test_files/format_validation_security_test.cpp
+        src/FormatValidation.cpp
+    )
+    target_include_directories(format_validation_security_test PRIVATE src)
+
+    if(UNIX)
+        target_compile_options(format_validation_security_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(format_validation_security_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME format_validation_security COMMAND format_validation_security_test)
+
+    add_executable(archive_boundary_security_test
+        test_files/archive_boundary_security_test.cpp
+        src/AtomicFile.cpp
+        src/FormatValidation.cpp
+        src/PathSecurity.cpp
+        src/CryptoArchive.cpp
+    )
+    target_include_directories(archive_boundary_security_test PRIVATE src)
+    target_link_libraries(archive_boundary_security_test PRIVATE OpenSSL::Crypto Threads::Threads)
+
+    if(UNIX)
+        target_compile_options(archive_boundary_security_test PRIVATE -Wall -Wextra)
+    elseif(WIN32)
+        target_compile_options(archive_boundary_security_test PRIVATE /W3 /utf-8)
+    endif()
+
+    add_test(NAME archive_boundary_security COMMAND archive_boundary_security_test)
+endif()
+
+if(PQCWALLET_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "The fuzzing target requires Clang/libFuzzer")
+    endif()
+
+    add_executable(format_parser_fuzz
+        fuzz/format_parser_fuzz.cpp
+        src/FormatValidation.cpp
+    )
+    target_include_directories(format_parser_fuzz PRIVATE src)
+    target_compile_options(format_parser_fuzz PRIVATE
+        -fsanitize=fuzzer,address,undefined
+        -fno-omit-frame-pointer
+    )
+    target_link_options(format_parser_fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
 endif()

@@ -1,5 +1,6 @@
 #include "FirstTimeSetupWindow.h"
 #include "PasswordManager.h"
+#include "PathSecurity.h"
 #include "Settings.h"
 #include "imgui.h"
 #include <cstring>
@@ -9,6 +10,7 @@ FirstTimeSetupWindow::FirstTimeSetupWindow() : setupComplete(false), showPasswor
 }
 
 FirstTimeSetupWindow::~FirstTimeSetupWindow() {
+    ClearBuffers();
 }
 
 void FirstTimeSetupWindow::Draw() {
@@ -16,10 +18,6 @@ void FirstTimeSetupWindow::Draw() {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->Size.x * 0.5f, viewport->Size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(500, 500), ImGuiCond_Always);
-    
-    // Style the window
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(30, 30));
     
     if (ImGui::Begin("First Time Setup", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove)) {
         
@@ -44,6 +42,14 @@ void FirstTimeSetupWindow::Draw() {
         ImGui::Text("Username:");
         ImGui::SetNextItemWidth(-1);
         ImGui::InputText("##username", usernameBuffer, sizeof(usernameBuffer));
+        std::string usernameError;
+        if (usernameBuffer[0] != '\0' &&
+            !PathSecurity::ValidateUsername(usernameBuffer, &usernameError)) {
+            ImGui::TextColored(
+                ImVec4(themeColors.errorText[0], themeColors.errorText[1],
+                       themeColors.errorText[2], themeColors.errorText[3]),
+                "%s", usernameError.c_str());
+        }
         
         ImGui::Spacing();
         
@@ -87,7 +93,7 @@ void FirstTimeSetupWindow::Draw() {
         
         // Real-time password validation
         if (strlen(confirmPasswordBuffer) > 0) {
-            if (std::string(passwordBuffer) != std::string(confirmPasswordBuffer)) {
+            if (std::strcmp(passwordBuffer, confirmPasswordBuffer) != 0) {
                 ImGui::TextColored(ImVec4(themeColors.errorText[0], themeColors.errorText[1], themeColors.errorText[2], themeColors.errorText[3]), "Passwords do not match!");
                 ImGui::Spacing();
             } else {
@@ -99,20 +105,20 @@ void FirstTimeSetupWindow::Draw() {
         // Create account button
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 200) * 0.5f);
         
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.3f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
-        Settings::PushBlackButtonText();
-        
         bool canCreate = ValidateInput();
         if (!canCreate) {
             ImGui::BeginDisabled(true);
         }
         
-        if (ImGui::Button("Create Account", ImVec2(200, 40))) {
+        if (settings.Button("Create Account", Settings::ButtonVariant::Primary,
+                            200.0f, Settings::Metrics().largeButtonHeight)) {
             if (canCreate) {
+                SecureMemory::SecureString submittedPassword(passwordBuffer);
+                SecureMemory::Cleanse(passwordBuffer);
+                SecureMemory::Cleanse(confirmPasswordBuffer);
                 PasswordManager pm;
-                if (pm.CreateUser(std::string(usernameBuffer), std::string(passwordBuffer))) {
+                if (!submittedPassword.empty() &&
+                    pm.CreateUser(std::string(usernameBuffer), submittedPassword.get())) {
                     successMessage = "Account created successfully! You can now log in.";
                     errorMessage.clear();
                     setupComplete = true;
@@ -127,9 +133,6 @@ void FirstTimeSetupWindow::Draw() {
             ImGui::EndDisabled();
         }
         
-        Settings::PopBlackButtonText();
-        ImGui::PopStyleColor(3);
-        
         ImGui::Spacing();
         ImGui::Spacing();
         
@@ -138,27 +141,26 @@ void FirstTimeSetupWindow::Draw() {
         ImGui::Spacing();
         
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.8f, 1.0f, 1.0f));
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("[LOCK] Your password will be encrypted using Kyber-768").x) * 0.5f);
-        ImGui::Text("[LOCK] Your password will be encrypted using Kyber-768");
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("[LOCK] Your password will be protected using ML-KEM-768").x) * 0.5f);
+        ImGui::Text("[LOCK] Your password will be protected using ML-KEM-768");
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("Post-Quantum Cryptography Algorithm").x) * 0.5f);
         ImGui::Text("Post-Quantum Cryptography Algorithm");
         ImGui::PopStyleColor();
     }
     
     ImGui::End();
-    ImGui::PopStyleVar(2);
 }
 
 bool FirstTimeSetupWindow::ValidateInput() const {
-    return strlen(usernameBuffer) > 0 && 
+    return PathSecurity::ValidateUsername(usernameBuffer) &&
            strlen(passwordBuffer) > 0 && 
-           std::string(passwordBuffer) == std::string(confirmPasswordBuffer);
+           std::strcmp(passwordBuffer, confirmPasswordBuffer) == 0;
 }
 
 void FirstTimeSetupWindow::ClearBuffers() {
     memset(usernameBuffer, 0, sizeof(usernameBuffer));
-    memset(passwordBuffer, 0, sizeof(passwordBuffer));
-    memset(confirmPasswordBuffer, 0, sizeof(confirmPasswordBuffer));
+    SecureMemory::Cleanse(passwordBuffer);
+    SecureMemory::Cleanse(confirmPasswordBuffer);
     errorMessage.clear();
     successMessage.clear();
 }

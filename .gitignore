@@ -1,51 +1,34 @@
-# Build directory (exclude build artifacts but keep scripts and docs)
-build/CMakeCache.txt
-build/CMakeFiles/
-build/Makefile
-build/cmake_install.cmake
-build/PQCWallet
-build/PQCWallet.exe
-build/*.exe
-build/*.dll
-build/*.so
-build/*.dylib
+# Build
+build/
+.build/
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# IDE
+.vscode/
+.idea/
 
-# Precompiled Headers SimedruF
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
+# Binaries
 *.exe
 *.out
 *.app
 
-# ImGui generated files
-imgui.ini
+# Objects
+*.o
+*.obj
+*.a
+*.lib
 
-# User data
-users/
-archives/
-extracted/
+# Debug files
+*.pdb
+*.ilk
 
-# IDE files
-.vscode/
-.idea/
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*~
 *.swp
-*.swo
+*.tmp

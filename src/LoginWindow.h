@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include "SecureMemory.h"
 
 class LoginWindow {
 public:
@@ -10,16 +11,16 @@ public:
     void Draw();
     bool IsLoginAttempted() const { return loginAttempted; }
     const std::string& GetUsername() const { return username; }
-    const std::string& GetPassword() const { return password; }
+    const std::string& GetPassword() const { return password.get(); }
     void ResetLoginAttempt() { loginAttempted = false; }
     bool IsLoginSuccessful() const { return loginSuccessful; }
-    void ResetLoginStatus() { loginSuccessful = false; }
+    void ResetLoginStatus();
     
 private:
     char usernameBuffer[256];
     char passwordBuffer[256];
     std::string username;
-    std::string password;
+    SecureMemory::SecureString password;
     bool loginAttempted;
     bool loginSuccessful;
     bool showPassword;

@@ -1,8 +1,48 @@
 #pragma once
 #include <string>
 
+struct ImVec4;
+struct ImVec2;
+
 class Settings {
 public:
+    enum class ButtonVariant {
+        Primary,
+        Secondary,
+        Danger,
+        Ghost
+    };
+
+    enum class UiIcon {
+        Info,
+        Success,
+        Warning,
+        Error,
+        Archive,
+        File,
+        Folder,
+        Lock
+    };
+
+    struct GuiMetrics {
+        float windowPadding = 20.0f;
+        float framePaddingX = 12.0f;
+        float framePaddingY = 8.0f;
+        float itemSpacing = 10.0f;
+        float itemInnerSpacing = 8.0f;
+        float windowRounding = 10.0f;
+        float childRounding = 8.0f;
+        float frameRounding = 6.0f;
+        float popupRounding = 8.0f;
+        float buttonHeight = 36.0f;
+        float largeButtonHeight = 42.0f;
+        float authWindowWidth = 500.0f;
+        float loginWindowHeight = 470.0f;
+        float sidebarWidth = 184.0f;
+        float archiveCardMinWidth = 210.0f;
+        float archiveCardHeight = 174.0f;
+    };
+
     Settings();
     ~Settings();
     
@@ -50,11 +90,29 @@ public:
         float warningText[4];     // Warning/yellow text
         float errorText[4];       // Error/red text
         float infoText[4];        // Info/blue text
+        float surface[4];         // Panels and cards
+        float surfaceElevated[4]; // Elevated controls and top bars
+        float border[4];          // Subtle separators and borders
     };
     
     ThemeColors GetThemeColors() const;
+    static const GuiMetrics& Metrics();
+
+    // Common button renderer. A width of zero uses the content width.
+    bool Button(const char* label, ButtonVariant variant = ButtonVariant::Secondary,
+                float width = 0.0f, float height = 0.0f) const;
+    bool IconButton(const char* label, UiIcon icon,
+                    ButtonVariant variant = ButtonVariant::Secondary,
+                    float width = 0.0f, float height = 0.0f) const;
+
+    // Small vector icons that do not depend on an external icon font.
+    void DrawIcon(UiIcon icon, const ImVec4& color, float size = 20.0f,
+                  bool advanceLayout = true) const;
+    void DrawIconAt(UiIcon icon, const ImVec4& color,
+                    const ImVec2& screenPosition, float size) const;
+    void DialogHeader(UiIcon icon, const char* title, const char* subtitle = nullptr) const;
     
-    // Helper for black button text
+    // Compatibility helper for older views. New code should use Button().
     static void PushBlackButtonText();
     static void PopBlackButtonText();
     
