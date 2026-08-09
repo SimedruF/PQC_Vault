@@ -32,3 +32,17 @@ Thumbs.db
 *~
 *.swp
 *.tmp
+
+# ImGui runtime state
+imgui.ini
+
+# Sensitive runtime data
+users/
+archives/
+extracted/
+config/settings.conf
+*.enc
+*.enc.lock
+*.pqc
+*.key
+*.pem

@@ -1,784 +1,185 @@
-# PQC Wallet - Post-Quantum Cryptography Wallet
-
-A secure wallet application using Dear ImGui with advanced post-quantum cryptography for password protection and encrypted file storage.
-
-## 🔐 Security Features
-
-- **Post-Quantum Cryptography**: Uses NIST-standardized ML-KEM-768 from liboqs
-- **Enhanced Login Security v4**: ML-KEM-768 with AES-256-GCM and independent nonces
-- **Quantum-Safe**: Resistant to attacks from quantum computers  
-- **Encrypted Storage**: All passwords encrypted with Scrypt key derivation
-- **Multi-User Support**: Each user has unique quantum-safe key pairs
-- **Encrypted Archives**: Password-based AES-256-GCM authenticated storage
-- **Authentication Tags**: Integrity verification prevents file tampering
-- **Restrictive Permissions**: File system level protection (600/700 permissions)
-- **Memory Hygiene**: Session secrets use non-copyable RAII storage and explicit zeroization
-
-## ✅ Status: FULLY FUNCTIONAL & SECURITY ENHANCED
-
-- ✅ GUI application with Dear ImGui (docking branch)
-- ✅ **ENHANCED**: Multi-layer security implementation (v2.0)
-- ✅ First-time setup for password creation with strong key derivation
-- ✅ ML-KEM-768 + AES-256-GCM login protection
-- ✅ Login authentication with enhanced encrypted passwords
-- ✅ Multi-user support with dropdown selection
-- ✅ **WORKING**: Encrypted archives for secure file storage
-- ✅ **NEW**: Multiple archives support per user
-- ✅ **VERIFIED**: Archive selection and creation functionality
-- ✅ **IMPROVED**: ImGuiFileDialog integration for file browsing
-- ✅ **NEW**: Advanced font management system with custom fonts
-- ✅ **SECURITY**: Legacy attack tools neutralized
-- ✅ Cross-platform compatibility (Linux tested, Windows/macOS supported)
-
-## 🔤 Font Management System v1.0
-
-### Customizable Typography
-- **Multiple Font Support**: System fonts and custom font loading
-- **Real-time Font Switching**: Change fonts without restart
-- **Dynamic Font Sizing**: Adjust font size from 8px to 32px
-- **Live Preview**: See changes before applying
-- **Font Auto-Detection**: Automatically finds system fonts
-- **Custom Font Directory**: Load fonts from `fonts/` folder
-
-### Font Features
-- **System Integration**: DejaVu Sans, Liberation Sans, Ubuntu fonts
-- **Custom Fonts**: Support for TTF font files
-- **Font Preview**: Real-time text preview with multiple samples
-- **Accessibility**: Adjustable sizing for better readability
-- **Cross-Platform**: Works on Linux, macOS, and Windows
-
-## Security Improvements v4
-
-### Enhanced Encryption Stack
-- **Key Derivation**: Scrypt with strong parameters (N=32768, r=8, p=1)
-- **KEM Standard**: ML-KEM-768 as standardized by NIST FIPS 203
-- **Secret Key Protection**: AES-256-GCM encryption of ML-KEM secret keys
-- **Authentication Tags**: Integrity verification prevents tampering
-- **Random Salt & Nonces**: Unique salt and independent 96-bit GCM nonces per user
-- **File Permissions**: Restrictive OS-level access control
-
-### Secret Management in Memory
-
-- Password owners use `SecureMemory::SecureString`, which overwrites occupied bytes
-  before replacement, logout, and destruction.
-- ImGui password buffers are wiped after submission, cancellation, window closure,
-  logout, and application shutdown.
-- The credential manager no longer caches or displays plaintext passwords after
-  verification.
-- Archive lists contain metadata only; decrypted payloads remain in one archive
-  owner and preview copies are wiped when closed.
-- Derived keys, KEM secrets, decrypted serialization buffers, and temporary preview
-  buffers are explicitly cleansed on success and error paths.
-- Decrypted file bytes are no longer printed in diagnostic logs.
-
-Explicit zeroization reduces the lifetime of recoverable secrets, but it cannot
-protect them from an attacker that already controls the running process or operating
-system. Copying a secret to the system clipboard also moves it outside the
-application's memory-cleanup boundary.
-
-### Security Comparison
-
-| Feature | Version 1.0 | Version 2.0 |
-|---------|-------------|-------------|
-| Secret Key Storage | ❌ Plaintext | ✅ AES-256-GCM Encrypted |
-| Password Encryption | ❌ XOR only | ✅ ML-KEM-768 + AES-256-GCM |
-| Key Derivation | ❌ None | ✅ Scrypt (Strong params) |
-| Integrity Check | ❌ None | ✅ Authentication Tags |
-| Salt/IV | ❌ None | ✅ Random per user |
-| File Permissions | ❌ Default | ✅ Restrictive (600/700) |
-| Legacy Tools | ❌ Working | ✅ Neutralized |
-
-## 🛡️ Post-Quantum Security
-
-### Simple Usage Guide
-PQC Wallet uses quantum-resistant algorithms to protect your data:
-
-1. **Login**: Your password is protected with quantum-safe encryption
-2. **File Storage**: Archives use password-derived AES-256-GCM encryption
-3. **Data Protection**: All sensitive data is encrypted with multiple layers
-
-### Encryption Algorithms Used
-
-#### Password Protection
-```
-User Password → Scrypt → AES-256-GCM + ML-KEM-768
-```
-- **Scrypt**: Key derivation function resistant to hardware attacks
-- **AES-256-GCM**: 256-bit authenticated encryption (quantum-vulnerable but still strong)
-- **ML-KEM-768**: NIST FIPS 203 post-quantum key encapsulation mechanism
-
-#### Archive Encryption
-```
-Archive Files → Scrypt → AES-256-GCM → Secure Storage
-```
-- **Scrypt**: Derives the archive key from the password and a random salt
-- **AES-256-GCM**: Encrypts and authenticates archive contents
-- **Authentication**: GCM tag detects an incorrect password or modified data
-
-#### Detailed Algorithm Specifications
-
-**ML-KEM-768 (Post-Quantum)**:
-- Security Level: 192-bit (equivalent to AES-192)
-- Key Size: 2400 bytes (public), 2400 bytes (secret)
-- Ciphertext Size: 1088 bytes
-- Based on: Module Learning With Errors (M-LWE) problem
-- Quantum Resistance: ✅ Proven secure against quantum computers
-
-**Scrypt (Key Derivation)**:
-- Parameters: N=32768, r=8, p=1
-- Output: 256-bit derived key
-- Memory Cost: ~32MB (prevents ASIC attacks)
-- Time Cost: Configurable difficulty
-
-**AES-256-GCM (Symmetric)**:
-- Key Size: 256 bits
-- Block Size: 128 bits
-- Authentication: Built-in AEAD (Authenticated Encryption)
-- Nonce Size: 96 bits (randomly generated)
-
-### Security Levels
-
-| Component | Classical Security | Quantum Security |
-|-----------|-------------------|------------------|
-| ML-KEM-768 | NIST category 3 | Post-quantum ✅ |
-| AES-256 | 256-bit | 128-bit ⚠️ |
-| Scrypt | Configurable | Memory-hard ✅ |
-| AES-GCM Tag | 128-bit | Authenticated encryption |
-
-**Legend**:
-- ✅ = Quantum-resistant
-- ⚠️ = Quantum-vulnerable but computationally infeasible
-
-### Why Post-Quantum?
-
-Future quantum computers will break current encryption:
-- **RSA**: Vulnerable to Shor's algorithm
-- **ECC**: Vulnerable to Shor's algorithm  
-- **AES**: Strength halved by Grover's algorithm
-- **ML-KEM**: Standardized post-quantum KEM based on Module-LWE
-
-PQC Wallet protects your data today and in the quantum future.
-
-## �🚀 Quick Start
-
-### Prerequisites
-- CMake 3.16+
-- OpenGL development libraries
-- OpenSSL development libraries (for enhanced security)
-- GLFW libraries and headers
-- C++17 compatible compiler
-- liboqs (automatically installed by setup script)
-
-See the detailed installation guide below for instructions on installing all dependencies.
-
-### Installation
-
-#### Linux/macOS
-```bash
-# Clone repository with all submodules
-git clone --recursive https://github.com/SimedruF/PQCWallet-Core.git
-cd PQCWallet
-
-# Make setup script executable and run it
-chmod +x setup.sh
-./setup.sh
-```
-
-#### Windows
-```batch
-# Clone repository with all submodules
-git clone --recursive https://github.com/SimedruF/PQCWallet-Core.git
-cd PQCWallet
-
-# Option 1: Use the setup wrapper (recommended)
-setup_windows.bat
-
-# Option 2: Run specific scripts manually
-build\scripts\setup_dependencies_windows.bat
-build\scripts\build_windows.bat
-```
-
-For detailed Windows build instructions, see: `build/docs/BUILD_WINDOWS.md`
-
-### Running
-
-#### Linux/macOS
-```bash
-./run.sh
-```
-
-#### Windows
-```batch
-# From build directory
-build\PQCWallet.exe
-
-# Or using the wrapper script
-setup_windows.bat
-# (select option 2 to build and run)
-```
-
-### Creating Desktop Shortcut
-
-#### Linux/macOS
-```bash
-# Create desktop shortcut after building the application
-./create_desktop_shortcut.sh
-```
-
-This creates:
-- Desktop shortcut for easy access
-- Applications menu entry
-- Proper file associations
-
-#### Windows
-```batch
-# Create desktop shortcut after building the application
-create_desktop_shortcut_windows.bat
-
-# Or use the wrapper script
-setup_windows.bat
-# (select option 5 to create shortcut)
-```
-
-This creates a desktop shortcut with proper Windows integration.
-
-### Generating Custom Icon
-
-#### Automatic Icon Generation (recommended)
-```bash
-# Generate a professional PQC-themed icon
-./generate_icon.sh
-```
-
-#### Simple Icon Creation (fallback)
-```bash
-# Create a simple SVG-based icon (no ImageMagick required)
-./create_simple_icon.sh
-```
-
-Both scripts create multiple icon sizes and formats for optimal cross-platform compatibility.
-
-### Font Setup (Optional)
-For additional fonts, download popular font packages:
-```bash
-# Download and install popular fonts
-./download_fonts.sh
-
-# Or manually add TTF fonts to fonts/ directory
-cp your-font.ttf fonts/
-```
-
-Access font settings via `View → Font Settings` in the application.
-
-### Security Migration
-For existing users, migrate to enhanced security:
-```bash
-# Compile and run the migration tool
-g++ -std=c++17 -I. migrate_security.cpp src/PasswordManager.cpp -loqs -lssl -lcrypto -o migrate_security
-./migrate_security
-
-# Test security improvements
-./demo_security.sh
-```
-
-## 📁 Project Structure
-
-```
-PQCWallet/
-├── src/
-│   ├── main.cpp                 # Application entry point
-│   ├── LoginWindow.cpp/.h       # Login interface with user selection
-│   ├── WalletWindow.cpp/.h      # Main wallet interface with archive management
-│   ├── PasswordManager.cpp/.h   # ML-KEM + AES-GCM login manager
-│   ├── CryptoArchive.cpp/.h     # Multi-archive encrypted storage manager
-│   ├── ArchiveWindow.cpp/.h     # Archive GUI interface with file management
-│   ├── FontManager.cpp/.h       # Font management and customization system
-│   └── FirstTimeSetupWindow.cpp/.h # Initial setup interface
-├── third_party/
-│   └── ImGuiFileDialog/         # File dialog library for intuitive browsing
-├── fonts/                       # Custom fonts directory (TTF files)
-├── users/                       # Enhanced encrypted password storage (v2.0)
-├── archives/                    # Multiple encrypted file archives per user
-├── build/                       # Build artifacts
-├── tools/                       # Security analysis and migration tools
-├── docs/                        # Documentation and guides
-├── setup.sh                     # Enhanced installation script
-├── run.sh                       # Application launcher
-├── download_fonts.sh            # Font download script
-├── migrate_security.cpp         # Security migration tool
-├── demo_security.sh            # Security demonstration script
-├── README.md                    # This file
-├── FONT_GUIDE.md               # Font management guide
-├── SECURITY_IMPROVEMENTS.md     # Detailed security analysis
-├── PASSWORD_EXTRACTION_GUIDE.md # Security research documentation
-├── USAGE.md                     # Detailed usage instructions
-├── EXAMPLES.md                  # Code examples
-├── ARCHIVE_GUIDE.md             # Archive usage guide
-├── IMGUI_FILE_DIALOG_GUIDE.md   # File dialog integration guide
-└── TEST_RESULTS.md              # Test verification results
-```
-
-## 🔧 Technical Details
-
-### Post-Quantum Cryptography Implementation v4
-- **Primary Algorithm**: ML-KEM-768 (NIST FIPS 203)
-- **Secondary Encryption**: AES-256-GCM for additional protection
-- **Library**: liboqs (Open Quantum Safe) + OpenSSL
-- **Key Derivation**: Scrypt with parameters N=32768, r=8, p=1
-- **Key Sizes**: 1184 bytes public key, 2400 bytes secret key
-- **Security Level**: Equivalent to AES-192 against quantum attacks + classical protection
-- **File Format**: Enhanced binary encrypted files (~4.8KB per user)
-
-### Enhanced Password Security
-- **Storage**: Passwords never stored in plaintext
-- **Key Derivation**: Scrypt with random 256-bit salt
-- **Primary Encryption**: XOR with ML-KEM-derived shared secret
-- **Secondary Encryption**: AES-256-GCM with authentication tags
-- **Secret Key Protection**: ML-KEM secret keys encrypted with AES-256-GCM
-- **Verification**: Multi-layer decryption-based authentication
-- **Integrity**: Authentication tags prevent file tampering
-- **File Permissions**: Restrictive OS-level protection (600 for files, 700 for directories)
-
-### GUI Implementation
-- **Framework**: Dear ImGui with docking support
-- **Graphics**: OpenGL 3.0+ with GLFW
-- **Windows**: Enhanced Login, FirstTimeSetup, Wallet, and Archive interfaces
-- **Archive Management**: Multiple archives per user with intuitive switching
-- **File Operations**: Graphical file browser with ImGuiFileDialog
-- **User Experience**: Settings moved to TopBar, improved navigation
-- **Styling**: Custom dark theme with modern appearance
-
-## 📋 Usage Workflow
-
-### Enhanced Security Workflow v2.0
-1. **First Run**: Application detects no users and shows setup window
-2. **User Creation**: Enter username and password, protected with ML-KEM + AES-GCM
-3. **Key Derivation**: Scrypt generates strong encryption keys from password
-4. **Secure Storage**: All cryptographic material stored with authentication tags
-5. **Login**: Select user from dropdown and enter password
-6. **Authentication**: Multi-layer password verification using ML-KEM + AES-GCM
-7. **Wallet Access**: Main wallet interface opens upon successful login
-8. **Archive Management**: Access multiple encrypted archives per user
-9. **Settings Access**: Use TopBar settings button for configuration
-
-### Legacy User Migration
-- **Automatic Detection**: System detects old format files
-- **Secure Migration**: Backup and upgrade to enhanced security
-- **Verification**: Confirm migration success before removing backup
-- **Tool Neutralization**: Old extraction tools no longer work
-
-## 🗃️ Enhanced Encrypted Archive Features
-
-### Secure File Storage v2.0
-- **Authenticated Encryption**: Files encrypted with password-derived AES-256-GCM
-- **Multiple Archives**: Create and manage multiple archives per user
-- **Archive Switching**: Seamlessly switch between different archives
-- **File Management**: Add, extract, preview, and remove files securely
-- **Integrity Verification**: SHA-256 hash verification for each file
-- **User Isolation**: Each user has their own encrypted archive collection
-- **Graphical File Browser**: Enhanced ImGuiFileDialog for intuitive file selection
-- **Debug Capabilities**: Comprehensive diagnostic tools for troubleshooting
-
-### Archive Operations
-- **Create Archives**: Create new archives with custom names
-- **Archive Selection**: Choose from available archives in dropdown list
-- **Add Files**: Import files using enhanced graphical file picker
-- **Extract Files**: Export files using improved folder selection dialog
-- **File Preview**: View text files and basic image information
-- **Archive Statistics**: View total files, size, and last modified time
-- **Password Management**: Change archive passwords securely
-- **Archive Diagnostics**: Built-in repair and diagnostic tools
-
-### Multiple Archives Management
-- **Archive Creation**: Create new archives for better organization
-- **Archive Listing**: View all available archives for current user
-- **Default Archive**: "img" archive created automatically for new users
-- **Archive Switching**: Load different archives without restarting application
-- **Isolated Storage**: Each archive has independent encryption and file storage
-- **Archive Naming**: Custom names for better organization (e.g., "Documents", "Photos", "Work")
-
-### Enhanced File Dialog Features
-- **Visual Navigation**: Browse filesystem with improved interface
-- **File Type Filtering**: Advanced filtering by file extensions
-- **Path Validation**: Automatic path validation and correction
-- **Multi-platform Support**: Consistent experience across operating systems
-- **Drag & Drop**: Enhanced drag and drop support (implementation in progress)
-- **Folder Selection**: Dedicated folder picker for extract operations
-- **Recent Paths**: Remember frequently used paths
-
-### Usage Examples
-```bash
-# After successful login, select from your archives in the main interface
-# Choose from available archives or create new ones via the menu
-# Click "Add Files" and use the enhanced file browser
-# Files stored in archives/username_archivename.enc
-# Use "Extract Selected" with improved folder picker
-# Switch between archives using the archive selection interface
-```
-
-### Multiple Archives Implementation Details
-
-#### Archive Organization
-Each user can create and manage multiple archives for better file organization:
-
-```
-archives/username_archivename.enc
-```
-
-Examples:
-```
-archives/john_img.enc         # Default "img" archive for user "john"
-archives/john_documents.enc  # "documents" archive for user "john"  
-archives/john_photos.enc     # "photos" archive for user "john"
-archives/john_work.enc        # "work" archive for user "john"
-```
-
-#### Usage Workflow
-1. After authentication, you'll see the list of available archives
-2. Select the desired archive from the list
-3. Click "Open Selected Archive" to open the selected archive
-4. Or click "Create New Archive" to create a new archive
-5. Enter a name for the new archive and confirm
-
-Each archive is independent and can contain its own set of files, all protected by the same user password.
-
-#### Archive Management Features
-- **Independent Storage**: Each archive maintains separate file storage and metadata
-- **Seamless Switching**: Switch between archives without application restart
-- **Custom Organization**: Group files by purpose, project, or category
-- **Shared Security**: All archives use the same user authentication
-- **Scalable Design**: No limit on number of archives per user
-- **Efficient Navigation**: Quick archive selection from dropdown interface
-## 🧪 Enhanced Testing & Validation
-
-### Security Testing v2.0
-```bash
-# Test enhanced security migration
-./migrate_security
-
-# Demonstrate security improvements  
-./demo_security.sh
-
-# Verify old tools are neutralized
-./extract_password  # Should fail with enhanced format
-```
-
-### Build Testing
-```bash
-cd build && cmake .. && make -j$(nproc)
-```
-
-### Encryption Testing
-```bash
-# Test enhanced password encryption
-./test_encryption_v2
-
-# Test legacy compatibility
-./test_legacy_support
-```
-
-### Archive Testing
-```bash
-# Test multiple archives functionality
-./test_multi_archives
-
-# Test archive switching
-./test_archive_switching
-```
-
-### GUI Testing
-```bash
-# Test complete application
-./run.sh
-
-# Test with multiple users
-./test_multi_user
-```
-
-See `TEST_RESULTS.md` for complete test verification.
-
-## 🔍 Enhanced Security Validation v2.0
-
-### Security Features Verification
-- **Multi-Layer Login Protection**: ML-KEM-768 + AES-256-GCM verified working
-- **Enhanced Key Derivation**: Scrypt with strong parameters (N=32768, r=8, p=1)
-- **Authenticated Encryption**: AES-GCM provides both encryption and authentication
-- **Legacy Tool Neutralization**: Old extraction tools confirmed non-functional
-- **File Permissions**: Restrictive OS-level permissions (600/700) enforced
-- **Migration Safety**: Secure upgrade path from v1.0 to v2.0 format
-- **PQC Standard**: ML-KEM-768 follows NIST FIPS 203
-- **Encrypted Files**: All password data encrypted with enhanced security
-- **Encrypted Archives**: User files stored in quantum-safe archives
-- **Unique Keys**: Each user has independent cryptographic material
-- **Access Control**: Enhanced file-based user isolation
-- **No Plaintext**: Passwords never stored or transmitted in plaintext
-- **Integrity Protection**: Authentication tags prevent file tampering
-
-### Security Analysis Tools
-- **Migration Tool**: `migrate_security.cpp` - Safely upgrade legacy users
-- **Security Demo**: `demo_security.sh` - Demonstrate security improvements
-- **Analysis Tools**: Various tools for security research and validation
-
-## 📚 Enhanced Documentation
-
-### Primary Documentation
-- **README.md**: This comprehensive guide
-- **SECURITY_IMPROVEMENTS.md**: Detailed security analysis and improvements
-- **PASSWORD_EXTRACTION_GUIDE.md**: Security research documentation
-- **USAGE.md**: Detailed usage instructions
-- **EXAMPLES.md**: Code examples and API documentation
-- **TEST_RESULTS.md**: Complete test verification results
-- **ARCHIVE_GUIDE.md**: Multi-archive usage instructions
-- **IMGUI_FILE_DIALOG_GUIDE.md**: File dialog integration details
-
-### Security Documentation
-- Analysis of security vulnerabilities in v1.0
-- Detailed implementation of security improvements in v2.0
-- Migration procedures and compatibility considerations
-- Security testing methodologies and results
-
-## 🛠️ Enhanced Dependencies
-
-### Runtime Dependencies v2.0
-- OpenGL 3.0+ (graphics rendering)
-- GLFW 3.3+ (window management)
-- **OpenSSL 3.0+** (enhanced cryptographic operations)
-- liboqs 0.8+ (post-quantum cryptography)
-- Dear ImGui (included as submodule)
-- ImGuiFileDialog (included as submodule)
-- stb_image (included in third_party)
-
-### Build Dependencies
-- CMake 3.16+
-- C++17 compatible compiler (GCC 8+, Clang 10+, MSVC 2019+)
-- OpenGL development headers
-- GLFW development headers
-- **OpenSSL development headers** (required for enhanced security)
-- pkg-config (for dependency resolution)
-
-## 📦 Detailed Installation Guide
-
-### Required Libraries Installation
-
-#### Debian/Ubuntu:
-```bash
-# Update package lists
-sudo apt update
-
-# Install base build tools
-sudo apt install -y build-essential git cmake
-
-# Install OpenGL dependencies
-sudo apt install -y libgl1-mesa-dev libglu1-mesa-dev
-
-# Install GLFW dependencies
-sudo apt install -y libglfw3-dev
-
-# Install OpenSSL
-sudo apt install -y libssl-dev
-
-# Install pkg-config (needed by build system)
-sudo apt install -y pkg-config
-```
-
-#### Fedora/CentOS/RHEL:
-```bash
-# Install base build tools
-sudo dnf install -y gcc g++ git cmake make
-
-# Install OpenGL dependencies
-sudo dnf install -y mesa-libGL-devel mesa-libGLU-devel
-
-# Install GLFW
-sudo dnf install -y glfw-devel
-
-# Install OpenSSL
-sudo dnf install -y openssl-devel
-
-# Install pkg-config
-sudo dnf install -y pkgconf
-```
-
-#### Arch Linux:
-```bash
-# Install base build tools
-sudo pacman -S base-devel git cmake
-
-# Install OpenGL dependencies
-sudo pacman -S mesa
-
-# Install GLFW
-sudo pacman -S glfw-x11 # or glfw-wayland for wayland users
-
-# Install OpenSSL
-sudo pacman -S openssl
-
-# Install pkg-config
-sudo pacman -S pkgconf
-```
-
-#### macOS (using Homebrew):
-```bash
-# Install Homebrew if not already installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Install base build tools
-brew install cmake
-
-# Install GLFW
-brew install glfw
-
-# Install OpenSSL
-brew install openssl
-
-# Create symlinks for OpenSSL (required for finding OpenSSL during build)
-brew link openssl --force
-```
-
-### Installing liboqs (Open Quantum Safe)
-
-The setup script will install liboqs automatically, but if you want to install it manually:
+# PQCWallet
+
+PQCWallet is an experimental C++17 desktop application for managing passwords,
+encrypted databases, and encrypted file archives. The interface is built with
+Dear ImGui, GLFW, and OpenGL. Cryptographic operations use OpenSSL and liboqs.
+
+> [!WARNING]
+> This project has not received an independent security audit. Treat it as
+> experimental software and do not use it as the only copy of critical data.
+
+## Current security design
+
+- New user records use ML-KEM-768, scrypt (`N=32768`, `r=8`, `p=1`), and
+  AES-256-GCM with independent 96-bit nonces.
+- The portable user format is currently version 5. Authenticated legacy formats
+  are migrated to the current ML-KEM format after a successful login.
+- Archive format version 2 uses scrypt and AES-256-GCM with authenticated,
+  versioned metadata.
+- Encrypted database format version 2 and backup format version 1 use scrypt and
+  AES-256-GCM.
+- Sensitive writes use atomic replacement and transactional file batches where
+  applicable. Path and container validation are covered by dedicated tests.
+- Sensitive buffers use explicit cleanup helpers where the implementation can
+  control their lifetime.
+
+ML-KEM protects the KEM portion of the user credential format. It does not make
+weak master passwords safe, and it does not replace the symmetric encryption
+used for archives and databases.
+
+## Features
+
+- multi-user login and first-time setup;
+- password manager with encrypted persistence;
+- encrypted database backup and restore;
+- authenticated encrypted archives;
+- archive creation, extraction, and drag-and-drop input;
+- configurable themes and local fonts;
+- Linux and Windows build coverage;
+- security tests, ASan/UBSan presets, and a bounded libFuzzer target.
+
+## Dependencies
+
+Required:
+
+- CMake 3.16 or newer (3.21 or newer for the included presets);
+- a C++17 compiler;
+- OpenSSL;
+- GLFW and OpenGL development packages;
+- liboqs with ML-KEM-768 enabled.
+
+The synchronized repository contains the Dear ImGui and ImGuiFileDialog sources
+used by the application. `liboqs` remains an external dependency and is not
+copied by the synchronization script.
+
+On Ubuntu or Debian, install the system dependencies with:
 
 ```bash
-# Clone liboqs repository
-git clone --branch main https://github.com/open-quantum-safe/liboqs.git
-
-# Create build directory
-cd liboqs && mkdir build && cd build
-
-# Configure with CMake
-cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON ..
-
-# Build
-make -j $(nproc)
-
-# Install (requires root privileges)
-sudo make install
-
-# Update dynamic linker
-sudo ldconfig
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential cmake ninja-build git \
+  libssl-dev libglfw3-dev libgl1-mesa-dev
 ```
 
-### Cloning the Repository with Submodules
+## Build on Linux
+
+Clone the project and build liboqs inside the project directory:
 
 ```bash
-# Clone the repository with all submodules
-git clone --recursive https://github.com/SimedruF/PQCWallet-Core.git
+git clone https://github.com/SimedruF/PQCWallet-Core.git
+cd PQCWallet-Core
 
-# If you already cloned without --recursive:
-cd PQCWallet
-git submodule update --init --recursive
+git clone https://github.com/open-quantum-safe/liboqs.git liboqs
+cmake -S liboqs -B liboqs/build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DOQS_BUILD_ONLY_LIB=ON \
+  -DBUILD_SHARED_LIBS=OFF
+cmake --build liboqs/build --parallel 2
 ```
 
-### Building from Source Manually
-
-If you prefer to build the project manually instead of using the setup script:
+Configure, compile, and test PQCWallet:
 
 ```bash
-# Create and enter build directory
-mkdir -p build && cd build
-
-# Configure with CMake
-cmake ..
-
-# Build the project
-make -j$(nproc)
-
-# Return to project root
-cd ..
+cmake -S . -B build/release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON
+cmake --build build/release --parallel
+ctest --test-dir build/release --output-on-failure
 ```
 
-### CMake Build Options
-
-You can customize the build using the following CMake options:
+Run the application:
 
 ```bash
-# Build with debug symbols
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-
-# Specify custom liboqs installation path
-cmake -Dliboqs_DIR=/path/to/liboqs/lib/cmake/liboqs ..
-
-# Specify custom OpenSSL path
-cmake -DOPENSSL_ROOT_DIR=/path/to/openssl ..
-
-# Build with sanitizers (for development only)
-cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON ..
+./build/release/PQCWallet
 ```
 
-### Troubleshooting
+## Sanitizer builds
 
-#### Cannot Find liboqs
-If CMake cannot find liboqs, you may need to specify the path manually:
+The included CMake presets enable AddressSanitizer and
+UndefinedBehaviorSanitizer:
+
 ```bash
-cmake -Dliboqs_DIR=/usr/local/lib/cmake/liboqs ..
+cmake --preset linux-sanitized-debug
+cmake --build --preset linux-sanitized-debug
+ctest --preset linux-sanitized-debug
 ```
 
-#### OpenSSL Not Found
-On some systems, you may need to specify the OpenSSL path:
+The fuzz target requires Clang/libFuzzer:
+
 ```bash
-cmake -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl ..  # For macOS with Homebrew
+cmake --preset linux-fuzz
+cmake --build --preset linux-fuzz
+./build/linux-fuzz/format_parser_fuzz fuzz/corpus -runs=20000
 ```
 
-#### GLFW Issues
-If you encounter GLFW-related errors:
+## Windows
+
+The project is built with CMake and is tested in CI on Windows using Ninja,
+vcpkg, OpenSSL, GLFW, and a locally built static liboqs. See the files under
+`windows/` and the documents under `documentation/` for the current platform
+notes.
+
+## Repository layout
+
+```text
+src/                         Application sources
+test_files/                  Security and regression tests
+fuzz/                        Format-parser fuzz target and seed corpus
+imgui/                       ImGui files required by GLFW/OpenGL3
+third_party/ImGuiFileDialog/ File-dialog dependency
+assets/                      Application icons
+fonts/                       Optional bundled fonts
+documentation/               Design, format, and security notes
+windows/                     Windows helper scripts
+git_setup/                   Repository synchronization tools
+```
+
+## Runtime data
+
+The application can create sensitive data in directories such as `users/`,
+`archives/`, `extracted/`, and `config/`. These files must not be committed.
+The repository ignore rules cover the known runtime formats, but always inspect
+the staged diff before publishing.
+
+Keep independent backups of encrypted data. A forgotten master password or a
+damaged authenticated container cannot be recovered by the application.
+
+## Synchronizing `PQCWallet-Core`
+
+Development takes place in the local PQCWallet workspace and the public Git
+repository is maintained separately. From the development workspace, preview
+the synchronization first:
+
 ```bash
-# For Ubuntu/Debian
-sudo apt install libglfw3-dev xorg-dev
-
-# For macOS
-brew install glfw
+cd /home/simedruf/Projects/PQCWallet
+./git_setup/sync_core_repo.sh
 ```
 
-#### Linker Errors
-If you get linker errors about missing libraries:
+Review the itemized changes, then apply them:
+
 ```bash
-# Update dynamic linker cache
-sudo ldconfig
-```
-## 🏗️ Architecture
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   GUI Layer     │    │ Authentication  │    │ Crypto Layer    │
-│  (Dear ImGui)   │◄──►│   (Login/Setup) │◄──►│ (ML-KEM/liboqs) │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                        │                        │
-         ▼                        ▼                        ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Main Loop     │    │  PasswordManager│    │  File Storage   │
-│  (Application)  │◄──►│   (Encryption)  │◄──►│  (users/*.enc)  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+./git_setup/sync_core_repo.sh --apply
 ```
 
-## 🚀 Future Enhancements
+The script synchronizes the explicit public-file manifest, removes obsolete
+files only inside managed directories, and refuses to apply over a dirty target
+repository. It does not create commits or push to GitHub.
 
-- **Additional PQC Algorithms**: Support for Dilithium signatures
-- **Hardware Security**: Integration with hardware security modules
-- **Network Security**: Quantum-safe network protocols
-- **Blockchain Integration**: Post-quantum blockchain interactions
-- **Multi-Factor Authentication**: Combine with biometric security
-- **Cross-Platform**: Windows and macOS support
+Review and publish from the target repository:
 
-## 🤝 Contributing
+```bash
+cd ~/PQCWallet-Core
+git status --short --branch
+git diff --check
+git diff
 
-This project demonstrates post-quantum cryptography implementation. Contributions welcome:
+git add -A
+git diff --cached --check
+git diff --cached
 
-1. Fork the repository
-2. Create a feature branch
-3. Test thoroughly
-4. Submit pull request
+git commit -m "Update PQCWallet sources"
+git push origin master
+```
 
-## 📄 License
-
-Open source project for educational and development purposes.
-
-## 🆘 Support
-
-For issues or questions:
-- [Open an issue on GitHub](https://github.com/SimedruF/PQCWallet-Core/issues) for support or bug reporting
-
-
----
-
-**Note**: The current V4 login format uses ML-KEM-768 from liboqs, standardized in NIST FIPS 203. Existing V2/V3 Kyber files are read only for automatic migration after successful authentication. Archives use password-derived AES-256-GCM.
+Never skip the staged-diff review when cryptographic code or file formats have
+changed.
